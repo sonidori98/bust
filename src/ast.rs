@@ -1,6 +1,13 @@
+use crate::token::Token;
+
 #[derive(Debug, Clone)]
 pub enum Expr {
     Integer(i64),
+    Binary {
+        op: Token,
+        left: Box<Expr>,
+        right: Box<Expr>,
+    },
 }
 
 #[derive(Debug, Clone)]

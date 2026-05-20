@@ -1,10 +1,10 @@
 use crate::{codegen::Codegen, lexer::Lexer, parser::Parser};
 
 mod ast;
+mod codegen;
 mod lexer;
 mod parser;
 mod token;
-mod codegen;
 
 fn main() {
     let input = "main() { return 42; }";
@@ -17,4 +17,3 @@ fn main() {
 
     print!("{code}");
 }
-

@@ -31,6 +31,10 @@ impl Lexer {
                 '{' => Some(Token::LBrace),
                 '}' => Some(Token::RBrace),
                 ';' => Some(Token::Semicolon),
+                '+' => Some(Token::Plus),
+                '-' => Some(Token::Minus),
+                '*' => Some(Token::Star),
+                '/' => Some(Token::Slash),
                 _ => None,
             };
             if let Some(t) = token {
@@ -95,6 +99,28 @@ mod tests {
                 Token::Integer(42),
                 Token::Semicolon,
                 Token::RBrace,
+                Token::EOF
+            ],
+            lexer.tokenize()
+        );
+    }
+
+    #[test]
+    fn test_lexer_arithmetic() {
+        let input = "1 + 2 * 3 / 4 - 5";
+        let mut lexer = Lexer::new(input);
+
+        assert_eq!(
+            vec![
+                Token::Integer(1),
+                Token::Plus,
+                Token::Integer(2),
+                Token::Star,
+                Token::Integer(3),
+                Token::Slash,
+                Token::Integer(4),
+                Token::Minus,
+                Token::Integer(5),
                 Token::EOF
             ],
             lexer.tokenize()

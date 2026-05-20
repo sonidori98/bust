@@ -1,4 +1,7 @@
-use crate::{ast::{Expr, Function, Program, Stmt}, token::Token};
+use crate::{
+    ast::{Expr, Function, Program, Stmt},
+    token::Token,
+};
 
 pub struct Parser {
     tokens: Vec<Token>,
@@ -50,7 +53,10 @@ impl Parser {
             body.push(self.parse_statement());
         }
         self.consume(Token::RBrace);
-        Function { name: "main".to_string(), body }
+        Function {
+            name: "main".to_string(),
+            body,
+        }
     }
 
     // "return" <expr> ";"
@@ -67,6 +73,42 @@ impl Parser {
     }
 
     fn parse_expression(&mut self) -> Expr {
+        self.parse_add_sub()
+    }
+
+    fn parse_add_sub(&mut self) -> Expr {
+        let mut left = self.parse_primary();
+
+        while *self.current_token() == Token::Plus || *self.current_token() == Token::Minus {
+            let op = self.current_token().clone();
+            self.pos += 1;
+            let right = self.parse_mul_div();
+            left = Expr::Binary {
+                op,
+                left: Box::new(left),
+                right: Box::new(right),
+            }
+        }
+        left
+    }
+
+    fn parse_mul_div(&mut self) -> Expr {
+        let mut left = self.parse_primary();
+
+        while *self.current_token() == Token::Star || *self.current_token() == Token::Slash {
+            let op = self.current_token().clone();
+            self.pos += 1;
+            let right = self.parse_primary();
+            left = Expr::Binary {
+                op,
+                left: Box::new(left),
+                right: Box::new(right),
+            }
+        }
+        left
+    }
+
+    fn parse_primary(&mut self) -> Expr {
         match self.current_token() {
             Token::Integer(val) => {
                 let val = *val;
@@ -81,33 +123,71 @@ impl Parser {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::lexer::Lexer; 
+    use crate::lexer::Lexer;
 
     #[test]
     fn test_parser() {
         let input = "main() { return 42; }";
-        
+
         let mut lexer = Lexer::new(input);
         let tokens = lexer.tokenize();
-        
+
         let mut parser = Parser::new(tokens);
         let program = parser.parse_program();
 
         assert_eq!(program.functions.len(), 1);
-        
+
         let func = &program.functions[0];
         assert_eq!(func.name, "main");
         assert_eq!(func.body.len(), 1);
 
         match &func.body[0] {
-            Stmt::Return(expr) => {
-                match expr {
-                    Expr::Integer(val) => {
-                        assert_eq!(*val, 42)
-                    },
-                    _ => panic!("Expected Expr::Integer"),
+            Stmt::Return(expr) => match expr {
+                Expr::Integer(val) => {
+                    assert_eq!(*val, 42)
                 }
-            }
+                _ => panic!("Expected Expr::Integer"),
+            },
+            _ => panic!("Expected Stmt::Return"),
+        }
+    }
+
+    #[test]
+    fn test_parser_arithmetic() {
+        let input = "main() { return 1 + 2 * 3; }";
+
+        let mut lexer = Lexer::new(input);
+        let tokens = lexer.tokenize();
+
+        let mut parser = Parser::new(tokens);
+        let program = parser.parse_program();
+
+        let func = &program.functions[0];
+        match &func.body[0] {
+            Stmt::Return(expr) => match expr {
+                Expr::Binary { op, left, right } => {
+                    assert_eq!(*op, Token::Plus);
+                    match &**left {
+                        Expr::Integer(val) => assert_eq!(*val, 1),
+                        _ => panic!("Expected Expr::Integer(1)"),
+                    }
+                    match &**right {
+                        Expr::Binary { op, left, right } => {
+                            assert_eq!(*op, Token::Star);
+                            match &**left {
+                                Expr::Integer(val) => assert_eq!(*val, 2),
+                                _ => panic!("Expected Expr::Integer(2)"),
+                            }
+                            match &**right {
+                                Expr::Integer(val) => assert_eq!(*val, 3),
+                                _ => panic!("Expected Expr::Integer(3)"),
+                            }
+                        }
+                        _ => panic!("Expected Expr::Binary (*)"),
+                    }
+                }
+                _ => panic!("Expected Expr::Binary (+)"),
+            },
             _ => panic!("Expected Stmt::Return"),
         }
     }
