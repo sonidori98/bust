@@ -15,7 +15,7 @@ pub enum Expr {
 pub enum Stmt {
     Return(Expr),
     Declaration(Vec<String>),
-    Assignment(String, Expr)
+    Assignment(String, Expr),
 }
 
 #[derive(Debug, Clone)]

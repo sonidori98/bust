@@ -1,31 +1,29 @@
 use crate::token::Token;
+use std::iter::Peekable;
+use std::str::Chars;
 
-pub struct Lexer {
-    input: Vec<char>,
-    pos: usize,
+pub struct Lexer<'a> {
+    iter: Peekable<Chars<'a>>,
 }
 
-impl Lexer {
-    pub fn new(input: &str) -> Self {
+impl<'a> Lexer<'a> {
+    pub fn new(input: &'a str) -> Self {
         Self {
-            input: input.chars().collect(),
-            pos: 0,
+            iter: input.chars().peekable(),
         }
     }
 
     pub fn tokenize(&mut self) -> Vec<Token> {
         let mut tokens = Vec::new();
 
-        while self.pos < self.input.len() {
-            let c = self.input[self.pos];
-
+        while let Some(&c) = self.iter.peek() {
             if c.is_whitespace() {
-                self.pos += 1;
+                self.iter.next();
                 continue;
             }
 
             // parentheses and delimiters
-            if let Some(t) = self.read_sign(c) {
+            if let Some(t) = self.read_sign() {
                 tokens.push(t);
                 continue;
             }
@@ -33,7 +31,7 @@ impl Lexer {
             // numeric literals
             if c.is_ascii_digit() {
                 tokens.push(self.read_number());
-                continue
+                continue;
             }
 
             // keywords and identifiers
@@ -41,56 +39,123 @@ impl Lexer {
                 tokens.push(self.read_identifier());
                 continue;
             }
-            panic!("Unknown token: {}, pos: {}", self.input[self.pos], self.pos);
+            panic!("Unknown token: {}", c);
         }
 
         tokens.push(Token::Eof);
         tokens
     }
 
-    fn read_sign(&mut self, c: char) -> Option<Token> {
-        let token = match c {
-            '(' => Some(Token::LParen),
-            ')' => Some(Token::RParen),
-            '{' => Some(Token::LBrace),
-            '}' => Some(Token::RBrace),
-            ';' => Some(Token::Semicolon),
-            ',' => Some(Token::Comma),
-            '+' => Some(Token::Plus),
-            '-' => Some(Token::Minus),
-            '*' => Some(Token::Star),
-            '/' => Some(Token::Slash),
-            '=' => Some(Token::Assign),
+    fn read_sign(&mut self) -> Option<Token> {
+        let &c = self.iter.peek()?;
+        match c {
+            '(' => {
+                self.iter.next();
+                Some(Token::LParen)
+            }
+            ')' => {
+                self.iter.next();
+                Some(Token::RParen)
+            }
+            '{' => {
+                self.iter.next();
+                Some(Token::LBrace)
+            }
+            '}' => {
+                self.iter.next();
+                Some(Token::RBrace)
+            }
+            ';' => {
+                self.iter.next();
+                Some(Token::Semicolon)
+            }
+            ',' => {
+                self.iter.next();
+                Some(Token::Comma)
+            }
+            '+' => {
+                self.iter.next();
+                Some(Token::Plus)
+            }
+            '-' => {
+                self.iter.next();
+                Some(Token::Minus)
+            }
+            '*' => {
+                self.iter.next();
+                Some(Token::Star)
+            }
+            '/' => {
+                self.iter.next();
+                Some(Token::Slash)
+            }
+            '=' => {
+                self.iter.next();
+                if self.iter.peek() == Some(&'=') {
+                    self.iter.next();
+                    Some(Token::Equal)
+                } else {
+                    Some(Token::Assign)
+                }
+            }
+            '!' => {
+                self.iter.next();
+                if self.iter.peek() == Some(&'=') {
+                    self.iter.next();
+                    Some(Token::NotEqual)
+                } else {
+                    panic!("Unknown token: !");
+                }
+            }
+            '<' => {
+                self.iter.next();
+                if self.iter.peek() == Some(&'=') {
+                    self.iter.next();
+                    Some(Token::LessEqual)
+                } else {
+                    Some(Token::LessThan)
+                }
+            }
+            '>' => {
+                self.iter.next();
+                if self.iter.peek() == Some(&'=') {
+                    self.iter.next();
+                    Some(Token::GreaterEqual)
+                } else {
+                    Some(Token::GreaterThan)
+                }
+            }
             _ => None,
-        };
-        if token.is_some() {
-            self.pos += 1;
         }
-        token
     }
 
     fn read_number(&mut self) -> Token {
-        let start = self.pos;
-        while self.pos < self.input.len() && self.input[self.pos].is_ascii_digit() {
-            self.pos += 1;
+        let mut num_str = String::new();
+        while let Some(&c) = self.iter.peek() {
+            if c.is_ascii_digit() {
+                num_str.push(self.iter.next().unwrap());
+            } else {
+                break;
+            }
         }
-        let num_str: String = self.input[start..self.pos].iter().collect();
-        let num = num_str.parse::<i64>().unwrap();
+        let num = num_str.parse::<i64>().expect("Failed to parse integer");
         Token::Integer(num)
     }
 
     fn read_identifier(&mut self) -> Token {
-        let start = self.pos;
-        while self.pos < self.input.len()
-            && (self.input[self.pos].is_ascii_alphanumeric() || self.input[self.pos] == '_')
-        {
-            self.pos += 1;
+        let mut word = String::new();
+        while let Some(&c) = self.iter.peek() {
+            if c.is_ascii_alphanumeric() || c == '_' {
+                word.push(self.iter.next().unwrap());
+            } else {
+                break;
+            }
         }
-        let word: String = self.input[start..self.pos].iter().collect();
         match &word[..] {
             "main" => Token::Main,
             "return" => Token::Return,
             "auto" => Token::Auto,
+            "if" => Token::If,
             _ => Token::Identifier(word),
         }
     }
@@ -157,6 +222,33 @@ mod tests {
                 Token::RParen,
                 Token::Star,
                 Token::Integer(3),
+                Token::Eof
+            ],
+            lexer.tokenize()
+        );
+    }
+
+    #[test]
+    fn test_lexer_comparison() {
+        let input = "x == 1 != 2 < 3 <= 4 > 5 >= 6 if";
+        let mut lexer = Lexer::new(input);
+
+        assert_eq!(
+            vec![
+                Token::Identifier("x".to_string()),
+                Token::Equal,
+                Token::Integer(1),
+                Token::NotEqual,
+                Token::Integer(2),
+                Token::LessThan,
+                Token::Integer(3),
+                Token::LessEqual,
+                Token::Integer(4),
+                Token::GreaterThan,
+                Token::Integer(5),
+                Token::GreaterEqual,
+                Token::Integer(6),
+                Token::If,
                 Token::Eof
             ],
             lexer.tokenize()

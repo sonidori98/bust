@@ -1,6 +1,6 @@
 use crate::{codegen::Codegen, lexer::Lexer, parser::Parser};
-use std::io::{Read, Write};
 use clap::Parser as ClapParser;
+use std::io::{Read, Write};
 
 mod ast;
 mod codegen;

@@ -1,4 +1,6 @@
 use std::collections::HashMap;
+use std::iter::Peekable;
+use std::vec::IntoIter;
 
 use crate::{
     ast::{Expr, Function, Program, Stmt},
@@ -11,8 +13,7 @@ pub struct CompilationResult {
 }
 
 pub struct Parser {
-    tokens: Vec<Token>,
-    pos: usize,
+    iter: Peekable<IntoIter<Token>>,
     vars: HashMap<String, i64>,
     next_offset: i64,
 }
@@ -20,36 +21,30 @@ pub struct Parser {
 impl Parser {
     pub fn new(tokens: Vec<Token>) -> Self {
         Self {
-            tokens,
-            pos: 0,
+            iter: tokens.into_iter().peekable(),
             vars: HashMap::new(),
             next_offset: -8,
         }
     }
 
-    fn current_token(&self) -> &Token {
-        if self.pos < self.tokens.len() {
-            &self.tokens[self.pos]
-        } else {
-            &Token::Eof
-        }
+    fn peek_token(&mut self) -> &Token {
+        self.iter.peek().unwrap_or(&Token::Eof)
+    }
+
+    fn next_token(&mut self) -> Token {
+        self.iter.next().unwrap_or(Token::Eof)
     }
 
     fn consume(&mut self, expected: Token) {
-        if *self.current_token() == expected {
-            self.pos += 1;
-        } else {
-            panic!(
-                "Expected {:?}, but got {:?}",
-                expected,
-                self.current_token()
-            );
+        let actual = self.next_token();
+        if actual != expected {
+            panic!("Expected {:?}, but got {:?}", expected, actual);
         }
     }
 
     pub fn parse_program(&mut self) -> CompilationResult {
         let mut functions = Vec::new();
-        while *self.current_token() != Token::Eof {
+        while *self.peek_token() != Token::Eof {
             functions.push(self.parse_function());
         }
         let program = Program { functions };
@@ -65,7 +60,7 @@ impl Parser {
         self.consume(Token::LBrace);
 
         let mut body = Vec::new();
-        while *self.current_token() != Token::RBrace {
+        while *self.peek_token() != Token::RBrace {
             body.push(self.parse_statement());
         }
         self.consume(Token::RBrace);
@@ -77,7 +72,8 @@ impl Parser {
 
     // "return" <expr> ";"
     fn parse_statement(&mut self) -> Stmt {
-        match self.current_token() {
+        let token = self.peek_token().clone();
+        match token {
             Token::Return => {
                 self.consume(Token::Return);
                 let expr = self.parse_expression();
@@ -88,14 +84,14 @@ impl Parser {
                 self.consume(Token::Auto);
                 let mut names = Vec::new();
                 loop {
-                    if let Token::Identifier(name) = self.current_token().clone() {
-                        self.pos += 1;
+                    if let Token::Identifier(name) = self.peek_token().clone() {
+                        self.next_token();
                         self.next_offset -= 8;
                         self.vars.insert(name.clone(), self.next_offset);
                         names.push(name);
 
-                        if *self.current_token() == Token::Comma {
-                            self.pos += 1;
+                        if *self.peek_token() == Token::Comma {
+                            self.next_token();
                             continue;
                         }
                     }
@@ -105,13 +101,12 @@ impl Parser {
                 Stmt::Declaration(names)
             }
             Token::Identifier(name) => {
-                if !self.vars.contains_key(name) {
+                if !self.vars.contains_key(&name) {
                     panic!("Undefined variable: {}", name);
                 }
-                let name = name.clone();
-                self.pos += 1;
+                self.next_token();
 
-                if *self.current_token() == Token::Assign {
+                if *self.peek_token() == Token::Assign {
                     self.consume(Token::Assign);
                     let expr = self.parse_expression();
                     self.consume(Token::Semicolon);
@@ -119,24 +114,56 @@ impl Parser {
                 } else {
                     panic!(
                         "Expected '=' after identifier, but got {:?}",
-                        self.current_token()
+                        self.peek_token()
                     );
                 }
             }
-            _ => panic!("Unsupported statement: {:?}", self.current_token()),
+            _ => panic!("Unsupported statement: {:?}", token),
         }
     }
 
     fn parse_expression(&mut self) -> Expr {
-        self.parse_add_sub()
+        self.parse_equality()
+    }
+
+    fn parse_equality(&mut self) -> Expr {
+        let mut left = self.parse_relational();
+
+        while matches!(*self.peek_token(), Token::Equal | Token::NotEqual) {
+            let op = self.next_token();
+            let right = self.parse_relational();
+            left = Expr::Binary {
+                op,
+                left: Box::new(left),
+                right: Box::new(right),
+            }
+        }
+        left
+    }
+
+    fn parse_relational(&mut self) -> Expr {
+        let mut left = self.parse_add_sub();
+
+        while matches!(
+            *self.peek_token(),
+            Token::LessThan | Token::LessEqual | Token::GreaterThan | Token::GreaterEqual
+        ) {
+            let op = self.next_token();
+            let right = self.parse_add_sub();
+            left = Expr::Binary {
+                op,
+                left: Box::new(left),
+                right: Box::new(right),
+            }
+        }
+        left
     }
 
     fn parse_add_sub(&mut self) -> Expr {
         let mut left = self.parse_mul_div();
 
-        while *self.current_token() == Token::Plus || *self.current_token() == Token::Minus {
-            let op = self.current_token().clone();
-            self.pos += 1;
+        while *self.peek_token() == Token::Plus || *self.peek_token() == Token::Minus {
+            let op = self.next_token();
             let right = self.parse_mul_div();
             left = Expr::Binary {
                 op,
@@ -150,9 +177,8 @@ impl Parser {
     fn parse_mul_div(&mut self) -> Expr {
         let mut left = self.parse_primary();
 
-        while *self.current_token() == Token::Star || *self.current_token() == Token::Slash {
-            let op = self.current_token().clone();
-            self.pos += 1;
+        while *self.peek_token() == Token::Star || *self.peek_token() == Token::Slash {
+            let op = self.next_token();
             let right = self.parse_primary();
             left = Expr::Binary {
                 op,
@@ -164,18 +190,17 @@ impl Parser {
     }
 
     fn parse_primary(&mut self) -> Expr {
-        match self.current_token() {
+        let token = self.peek_token().clone();
+        match token {
             Token::Integer(val) => {
-                let val = *val;
-                self.pos += 1;
+                self.next_token();
                 Expr::Integer(val)
             }
             Token::Identifier(name) => {
-                if !self.vars.contains_key(name) {
+                if !self.vars.contains_key(&name) {
                     panic!("Undefined variable: {}", name);
                 }
-                let name = name.clone();
-                self.pos += 1;
+                self.next_token();
                 Expr::Identifier(name)
             }
             Token::LParen => {
@@ -184,7 +209,7 @@ impl Parser {
                 self.consume(Token::RParen);
                 expr
             }
-            _ => panic!("Expected expression, but got {:?}", self.current_token()),
+            _ => panic!("Expected expression, but got {:?}", token),
         }
     }
 }
@@ -193,6 +218,17 @@ impl Parser {
 mod tests {
     use super::*;
     use crate::lexer::Lexer;
+
+    #[test]
+    #[should_panic(expected = "Undefined variable: y")]
+    fn test_parser_undefined_variable() {
+        let input = "main() { auto x; return x + y; }";
+        let mut lexer = Lexer::new(input);
+        let tokens = lexer.tokenize();
+
+        let mut parser = Parser::new(tokens);
+        parser.parse_program();
+    }
 
     #[test]
     fn test_parser_variables() {
@@ -254,17 +290,6 @@ mod tests {
         } else {
             panic!("Expected Stmt::Return");
         }
-    }
-
-    #[test]
-    #[should_panic(expected = "Undefined variable: y")]
-    fn test_parser_undefined_variable() {
-        let input = "main() { auto x; return x + y; }";
-        let mut lexer = Lexer::new(input);
-        let tokens = lexer.tokenize();
-
-        let mut parser = Parser::new(tokens);
-        parser.parse_program();
     }
 
     #[test]
@@ -330,6 +355,29 @@ mod tests {
                     }
                 }
                 _ => panic!("Expected Expr::Binary (+)"),
+            }
+        } else {
+            panic!("Expected Stmt::Return");
+        }
+    }
+
+    #[test]
+    fn test_parser_comparison() {
+        let input = "main() { return 1 == 2 != 3 < 4 <= 5 > 6 >= 7; }";
+
+        let mut lexer = Lexer::new(input);
+        let tokens = lexer.tokenize();
+
+        let mut parser = Parser::new(tokens);
+        let cr = parser.parse_program();
+
+        let func = &cr.program.functions[0];
+        if let Stmt::Return(expr) = &func.body[0] {
+            // Check equality (==, !=)
+            if let Expr::Binary { op, .. } = expr {
+                assert!(matches!(op, Token::Equal | Token::NotEqual));
+            } else {
+                panic!("Expected Expr::Binary for comparison");
             }
         } else {
             panic!("Expected Stmt::Return");

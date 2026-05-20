@@ -98,6 +98,36 @@ impl Codegen {
                         self.output.push_str("    cqo\n");
                         self.output.push_str("    idiv rdi\n");
                     }
+                    Token::Equal => {
+                        self.output.push_str("    cmp rax, rdi\n");
+                        self.output.push_str("    sete al\n");
+                        self.output.push_str("    movzx rax, al\n");
+                    }
+                    Token::NotEqual => {
+                        self.output.push_str("    cmp rax, rdi\n");
+                        self.output.push_str("    setne al\n");
+                        self.output.push_str("    movzx rax, al\n");
+                    }
+                    Token::LessThan => {
+                        self.output.push_str("    cmp rax, rdi\n");
+                        self.output.push_str("    setl al\n");
+                        self.output.push_str("    movzx rax, al\n");
+                    }
+                    Token::LessEqual => {
+                        self.output.push_str("    cmp rax, rdi\n");
+                        self.output.push_str("    setle al\n");
+                        self.output.push_str("    movzx rax, al\n");
+                    }
+                    Token::GreaterThan => {
+                        self.output.push_str("    cmp rax, rdi\n");
+                        self.output.push_str("    setg al\n");
+                        self.output.push_str("    movzx rax, al\n");
+                    }
+                    Token::GreaterEqual => {
+                        self.output.push_str("    cmp rax, rdi\n");
+                        self.output.push_str("    setge al\n");
+                        self.output.push_str("    movzx rax, al\n");
+                    }
                     _ => panic!("Unsupported operator: {:?}", op),
                 }
                 self.output.push_str("    push rax\n");
@@ -216,6 +246,19 @@ main:
 
         assert!(code.contains("sub rax, rdi"));
         assert!(code.contains("idiv rdi"));
+    }
+
+    #[test]
+    fn test_codegen_comparison() {
+        let input = "main() { return 1 == 2; }";
+        let mut lexer = Lexer::new(input);
+        let mut parser = Parser::new(lexer.tokenize());
+        let cr = parser.parse_program();
+        let code = Codegen::new().generate(&cr.program, &cr.vars);
+
+        assert!(code.contains("cmp rax, rdi"));
+        assert!(code.contains("sete al"));
+        assert!(code.contains("movzx rax, al"));
     }
 
     #[test]

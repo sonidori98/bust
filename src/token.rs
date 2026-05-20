@@ -3,12 +3,19 @@ pub enum Token {
     Auto,         // "auto"
     Main,         // "main"
     Return,       // "return"
+    If,           // "if"
     Integer(i64), // integer
     Plus,         // +
     Minus,        // -
     Star,         // *
     Slash,        // /
     Assign,       // =
+    Equal,        // ==
+    NotEqual,     // !=
+    LessThan,     // <
+    LessEqual,    // <=
+    GreaterThan,  // >
+    GreaterEqual, // >=
     LParen,       // '('
     RParen,       // ')'
     LBrace,       // '{'
