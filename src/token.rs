@@ -13,5 +13,5 @@ pub enum Token {
     RBrace,       // '}'
     Semicolon,    // ';'
     Identifier(String),
-    EOF, // End of file
+    Eof, // End of file
 }

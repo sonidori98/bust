@@ -17,7 +17,7 @@ impl Parser {
         if self.pos < self.tokens.len() {
             &self.tokens[self.pos]
         } else {
-            &Token::EOF
+            &Token::Eof
         }
     }
 
@@ -35,7 +35,7 @@ impl Parser {
 
     pub fn parse_program(&mut self) -> Program {
         let mut functions = Vec::new();
-        while *self.current_token() != Token::EOF {
+        while *self.current_token() != Token::Eof {
             functions.push(self.parse_function());
         }
         Program { functions }
@@ -77,7 +77,7 @@ impl Parser {
     }
 
     fn parse_add_sub(&mut self) -> Expr {
-        let mut left = self.parse_primary();
+        let mut left = self.parse_mul_div();
 
         while *self.current_token() == Token::Plus || *self.current_token() == Token::Minus {
             let op = self.current_token().clone();
@@ -115,6 +115,12 @@ impl Parser {
                 self.pos += 1;
                 Expr::Integer(val)
             }
+            Token::LParen => {
+                self.consume(Token::LParen);
+                let expr = self.parse_expression();
+                self.consume(Token::RParen);
+                expr
+            }
             _ => panic!("Expected expression, but got {:?}", self.current_token()),
         }
     }
@@ -141,14 +147,12 @@ mod tests {
         assert_eq!(func.name, "main");
         assert_eq!(func.body.len(), 1);
 
-        match &func.body[0] {
-            Stmt::Return(expr) => match expr {
-                Expr::Integer(val) => {
-                    assert_eq!(*val, 42)
-                }
-                _ => panic!("Expected Expr::Integer"),
-            },
-            _ => panic!("Expected Stmt::Return"),
+        let Stmt::Return(expr) = &func.body[0];
+        match expr {
+            Expr::Integer(val) => {
+                assert_eq!(*val, 42)
+            }
+            _ => panic!("Expected Expr::Integer"),
         }
     }
 
@@ -163,32 +167,68 @@ mod tests {
         let program = parser.parse_program();
 
         let func = &program.functions[0];
-        match &func.body[0] {
-            Stmt::Return(expr) => match expr {
-                Expr::Binary { op, left, right } => {
-                    assert_eq!(*op, Token::Plus);
-                    match &**left {
-                        Expr::Integer(val) => assert_eq!(*val, 1),
-                        _ => panic!("Expected Expr::Integer(1)"),
-                    }
-                    match &**right {
-                        Expr::Binary { op, left, right } => {
-                            assert_eq!(*op, Token::Star);
-                            match &**left {
-                                Expr::Integer(val) => assert_eq!(*val, 2),
-                                _ => panic!("Expected Expr::Integer(2)"),
-                            }
-                            match &**right {
-                                Expr::Integer(val) => assert_eq!(*val, 3),
-                                _ => panic!("Expected Expr::Integer(3)"),
-                            }
-                        }
-                        _ => panic!("Expected Expr::Binary (*)"),
-                    }
+        let Stmt::Return(expr) = &func.body[0];
+        match expr {
+            Expr::Binary { op, left, right } => {
+                assert_eq!(*op, Token::Plus);
+                match &**left {
+                    Expr::Integer(val) => assert_eq!(*val, 1),
+                    _ => panic!("Expected Expr::Integer(1)"),
                 }
-                _ => panic!("Expected Expr::Binary (+)"),
-            },
-            _ => panic!("Expected Stmt::Return"),
+                match &**right {
+                    Expr::Binary { op, left, right } => {
+                        assert_eq!(*op, Token::Star);
+                        match &**left {
+                            Expr::Integer(val) => assert_eq!(*val, 2),
+                            _ => panic!("Expected Expr::Integer(2)"),
+                        }
+                        match &**right {
+                            Expr::Integer(val) => assert_eq!(*val, 3),
+                            _ => panic!("Expected Expr::Integer(3)"),
+                        }
+                    }
+                    _ => panic!("Expected Expr::Binary (*)"),
+                }
+            }
+            _ => panic!("Expected Expr::Binary (+)"),
+        }
+    }
+
+    #[test]
+    fn test_parser_parentheses() {
+        let input = "main() { return (1 + 2) * 3; }";
+
+        let mut lexer = Lexer::new(input);
+        let tokens = lexer.tokenize();
+
+        let mut parser = Parser::new(tokens);
+        let program = parser.parse_program();
+
+        let func = &program.functions[0];
+        let Stmt::Return(expr) = &func.body[0];
+        match expr {
+            Expr::Binary { op, left, right } => {
+                assert_eq!(*op, Token::Star);
+                match &**left {
+                    Expr::Binary { op, left, right } => {
+                        assert_eq!(*op, Token::Plus);
+                        match &**left {
+                            Expr::Integer(val) => assert_eq!(*val, 1),
+                            _ => panic!("Expected Expr::Integer(1)"),
+                        }
+                        match &**right {
+                            Expr::Integer(val) => assert_eq!(*val, 2),
+                            _ => panic!("Expected Expr::Integer(2)"),
+                        }
+                    }
+                    _ => panic!("Expected Expr::Binary (+)"),
+                }
+                match &**right {
+                    Expr::Integer(val) => assert_eq!(*val, 3),
+                    _ => panic!("Expected Expr::Integer(3)"),
+                }
+            }
+            _ => panic!("Expected Expr::Binary (*)"),
         }
     }
 }

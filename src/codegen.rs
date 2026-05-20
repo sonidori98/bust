@@ -148,4 +148,24 @@ main:
         assert!(code.contains("pop rax"));
         assert!(code.contains("add rax, rdi"));
     }
+
+    #[test]
+    fn test_codegen_parentheses() {
+        let input = "main() { return (1 + 2) * 3; }";
+
+        let mut lexer = Lexer::new(input);
+        let tokens = lexer.tokenize();
+
+        let mut parser = Parser::new(tokens);
+        let program = parser.parse_program();
+
+        let mut codegen = Codegen::new();
+        let code = codegen.generate(&program);
+
+        assert!(code.contains("mov rax, 1"));
+        assert!(code.contains("mov rax, 2"));
+        assert!(code.contains("add rax, rdi"));
+        assert!(code.contains("mov rax, 3"));
+        assert!(code.contains("imul rax, rdi"));
+    }
 }
