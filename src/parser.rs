@@ -1,16 +1,30 @@
+use std::collections::HashMap;
+
 use crate::{
     ast::{Expr, Function, Program, Stmt},
     token::Token,
 };
 
+pub struct CompilationResult {
+    pub program: Program,
+    pub vars: HashMap<String, i64>,
+}
+
 pub struct Parser {
     tokens: Vec<Token>,
     pos: usize,
+    vars: HashMap<String, i64>,
+    next_offset: i64,
 }
 
 impl Parser {
     pub fn new(tokens: Vec<Token>) -> Self {
-        Self { tokens, pos: 0 }
+        Self {
+            tokens,
+            pos: 0,
+            vars: HashMap::new(),
+            next_offset: -8,
+        }
     }
 
     fn current_token(&self) -> &Token {
@@ -33,12 +47,14 @@ impl Parser {
         }
     }
 
-    pub fn parse_program(&mut self) -> Program {
+    pub fn parse_program(&mut self) -> CompilationResult {
         let mut functions = Vec::new();
         while *self.current_token() != Token::Eof {
             functions.push(self.parse_function());
         }
-        Program { functions }
+        let program = Program { functions };
+        let vars = std::mem::take(&mut self.vars);
+        CompilationResult { program, vars }
     }
 
     // "main" "(" ")" "{" ... "}"
@@ -67,6 +83,45 @@ impl Parser {
                 let expr = self.parse_expression();
                 self.consume(Token::Semicolon);
                 Stmt::Return(expr)
+            }
+            Token::Auto => {
+                self.consume(Token::Auto);
+                let mut names = Vec::new();
+                loop {
+                    if let Token::Identifier(name) = self.current_token().clone() {
+                        self.pos += 1;
+                        self.next_offset -= 8;
+                        self.vars.insert(name.clone(), self.next_offset);
+                        names.push(name);
+
+                        if *self.current_token() == Token::Comma {
+                            self.pos += 1;
+                            continue;
+                        }
+                    }
+                    break;
+                }
+                self.consume(Token::Semicolon);
+                Stmt::Declaration(names)
+            }
+            Token::Identifier(name) => {
+                if !self.vars.contains_key(name) {
+                    panic!("Undefined variable: {}", name);
+                }
+                let name = name.clone();
+                self.pos += 1;
+
+                if *self.current_token() == Token::Assign {
+                    self.consume(Token::Assign);
+                    let expr = self.parse_expression();
+                    self.consume(Token::Semicolon);
+                    Stmt::Assignment(name, expr)
+                } else {
+                    panic!(
+                        "Expected '=' after identifier, but got {:?}",
+                        self.current_token()
+                    );
+                }
             }
             _ => panic!("Unsupported statement: {:?}", self.current_token()),
         }
@@ -115,6 +170,14 @@ impl Parser {
                 self.pos += 1;
                 Expr::Integer(val)
             }
+            Token::Identifier(name) => {
+                if !self.vars.contains_key(name) {
+                    panic!("Undefined variable: {}", name);
+                }
+                let name = name.clone();
+                self.pos += 1;
+                Expr::Identifier(name)
+            }
             Token::LParen => {
                 self.consume(Token::LParen);
                 let expr = self.parse_expression();
@@ -132,6 +195,79 @@ mod tests {
     use crate::lexer::Lexer;
 
     #[test]
+    fn test_parser_variables() {
+        let input = "main() { auto x, y; x = 1; y = 2; return x + y; }";
+
+        let mut lexer = Lexer::new(input);
+        let tokens = lexer.tokenize();
+
+        let mut parser = Parser::new(tokens);
+        let cr = parser.parse_program();
+
+        let func = &cr.program.functions[0];
+        assert_eq!(func.body.len(), 4);
+
+        if let Stmt::Declaration(names) = &func.body[0] {
+            assert_eq!(names, &vec!["x".to_string(), "y".to_string()]);
+        } else {
+            panic!("Expected Stmt::Declaration");
+        }
+
+        if let Stmt::Assignment(name, expr) = &func.body[1] {
+            assert_eq!(name, "x");
+            if let Expr::Integer(val) = expr {
+                assert_eq!(*val, 1);
+            } else {
+                panic!("Expected Expr::Integer(1)");
+            }
+        } else {
+            panic!("Expected Stmt::Assignment");
+        }
+
+        if let Stmt::Assignment(name, expr) = &func.body[2] {
+            assert_eq!(name, "y");
+            if let Expr::Integer(val) = expr {
+                assert_eq!(*val, 2);
+            } else {
+                panic!("Expected Expr::Integer(2)");
+            }
+        } else {
+            panic!("Expected Stmt::Assignment");
+        }
+
+        if let Stmt::Return(expr) = &func.body[3] {
+            if let Expr::Binary { op, left, right } = expr {
+                assert_eq!(op, &Token::Plus);
+                if let Expr::Identifier(name) = &**left {
+                    assert_eq!(name, "x");
+                } else {
+                    panic!("Expected Expr::Identifier(x)");
+                }
+                if let Expr::Identifier(name) = &**right {
+                    assert_eq!(name, "y");
+                } else {
+                    panic!("Expected Expr::Identifier(y)");
+                }
+            } else {
+                panic!("Expected Expr::Binary(+)");
+            }
+        } else {
+            panic!("Expected Stmt::Return");
+        }
+    }
+
+    #[test]
+    #[should_panic(expected = "Undefined variable: y")]
+    fn test_parser_undefined_variable() {
+        let input = "main() { auto x; return x + y; }";
+        let mut lexer = Lexer::new(input);
+        let tokens = lexer.tokenize();
+
+        let mut parser = Parser::new(tokens);
+        parser.parse_program();
+    }
+
+    #[test]
     fn test_parser() {
         let input = "main() { return 42; }";
 
@@ -139,20 +275,23 @@ mod tests {
         let tokens = lexer.tokenize();
 
         let mut parser = Parser::new(tokens);
-        let program = parser.parse_program();
+        let cr = parser.parse_program();
 
-        assert_eq!(program.functions.len(), 1);
+        assert_eq!(cr.program.functions.len(), 1);
 
-        let func = &program.functions[0];
+        let func = &cr.program.functions[0];
         assert_eq!(func.name, "main");
         assert_eq!(func.body.len(), 1);
 
-        let Stmt::Return(expr) = &func.body[0];
-        match expr {
-            Expr::Integer(val) => {
-                assert_eq!(*val, 42)
+        if let Stmt::Return(expr) = &func.body[0] {
+            match expr {
+                Expr::Integer(val) => {
+                    assert_eq!(*val, 42)
+                }
+                _ => panic!("Expected Expr::Integer"),
             }
-            _ => panic!("Expected Expr::Integer"),
+        } else {
+            panic!("Expected Stmt::Return");
         }
     }
 
@@ -164,33 +303,36 @@ mod tests {
         let tokens = lexer.tokenize();
 
         let mut parser = Parser::new(tokens);
-        let program = parser.parse_program();
+        let cr = parser.parse_program();
 
-        let func = &program.functions[0];
-        let Stmt::Return(expr) = &func.body[0];
-        match expr {
-            Expr::Binary { op, left, right } => {
-                assert_eq!(*op, Token::Plus);
-                match &**left {
-                    Expr::Integer(val) => assert_eq!(*val, 1),
-                    _ => panic!("Expected Expr::Integer(1)"),
-                }
-                match &**right {
-                    Expr::Binary { op, left, right } => {
-                        assert_eq!(*op, Token::Star);
-                        match &**left {
-                            Expr::Integer(val) => assert_eq!(*val, 2),
-                            _ => panic!("Expected Expr::Integer(2)"),
-                        }
-                        match &**right {
-                            Expr::Integer(val) => assert_eq!(*val, 3),
-                            _ => panic!("Expected Expr::Integer(3)"),
-                        }
+        let func = &cr.program.functions[0];
+        if let Stmt::Return(expr) = &func.body[0] {
+            match expr {
+                Expr::Binary { op, left, right } => {
+                    assert_eq!(op, &Token::Plus);
+                    match &**left {
+                        Expr::Integer(val) => assert_eq!(*val, 1),
+                        _ => panic!("Expected Expr::Integer(1)"),
                     }
-                    _ => panic!("Expected Expr::Binary (*)"),
+                    match &**right {
+                        Expr::Binary { op, left, right } => {
+                            assert_eq!(op, &Token::Star);
+                            match &**left {
+                                Expr::Integer(val) => assert_eq!(*val, 2),
+                                _ => panic!("Expected Expr::Integer(2)"),
+                            }
+                            match &**right {
+                                Expr::Integer(val) => assert_eq!(*val, 3),
+                                _ => panic!("Expected Expr::Integer(3)"),
+                            }
+                        }
+                        _ => panic!("Expected Expr::Binary (*)"),
+                    }
                 }
+                _ => panic!("Expected Expr::Binary (+)"),
             }
-            _ => panic!("Expected Expr::Binary (+)"),
+        } else {
+            panic!("Expected Stmt::Return");
         }
     }
 
@@ -202,33 +344,36 @@ mod tests {
         let tokens = lexer.tokenize();
 
         let mut parser = Parser::new(tokens);
-        let program = parser.parse_program();
+        let cr = parser.parse_program();
 
-        let func = &program.functions[0];
-        let Stmt::Return(expr) = &func.body[0];
-        match expr {
-            Expr::Binary { op, left, right } => {
-                assert_eq!(*op, Token::Star);
-                match &**left {
-                    Expr::Binary { op, left, right } => {
-                        assert_eq!(*op, Token::Plus);
-                        match &**left {
-                            Expr::Integer(val) => assert_eq!(*val, 1),
-                            _ => panic!("Expected Expr::Integer(1)"),
+        let func = &cr.program.functions[0];
+        if let Stmt::Return(expr) = &func.body[0] {
+            match expr {
+                Expr::Binary { op, left, right } => {
+                    assert_eq!(op, &Token::Star);
+                    match &**left {
+                        Expr::Binary { op, left, right } => {
+                            assert_eq!(op, &Token::Plus);
+                            match &**left {
+                                Expr::Integer(val) => assert_eq!(*val, 1),
+                                _ => panic!("Expected Expr::Integer(1)"),
+                            }
+                            match &**right {
+                                Expr::Integer(val) => assert_eq!(*val, 2),
+                                _ => panic!("Expected Expr::Integer(2)"),
+                            }
                         }
-                        match &**right {
-                            Expr::Integer(val) => assert_eq!(*val, 2),
-                            _ => panic!("Expected Expr::Integer(2)"),
-                        }
+                        _ => panic!("Expected Expr::Binary (+)"),
                     }
-                    _ => panic!("Expected Expr::Binary (+)"),
+                    match &**right {
+                        Expr::Integer(val) => assert_eq!(*val, 3),
+                        _ => panic!("Expected Expr::Integer(3)"),
+                    }
                 }
-                match &**right {
-                    Expr::Integer(val) => assert_eq!(*val, 3),
-                    _ => panic!("Expected Expr::Integer(3)"),
-                }
+                _ => panic!("Expected Expr::Binary (*)"),
             }
-            _ => panic!("Expected Expr::Binary (*)"),
+        } else {
+            panic!("Expected Stmt::Return");
         }
     }
 }

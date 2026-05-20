@@ -3,6 +3,7 @@ use crate::token::Token;
 #[derive(Debug, Clone)]
 pub enum Expr {
     Integer(i64),
+    Identifier(String),
     Binary {
         op: Token,
         left: Box<Expr>,
@@ -13,6 +14,8 @@ pub enum Expr {
 #[derive(Debug, Clone)]
 pub enum Stmt {
     Return(Expr),
+    Declaration(Vec<String>),
+    Assignment(String, Expr)
 }
 
 #[derive(Debug, Clone)]

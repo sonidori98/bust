@@ -39,8 +39,8 @@ fn main() {
     let tokens = lexer.tokenize();
     let mut parser = Parser::new(tokens);
     let mut codegen = Codegen::new();
-    let program = parser.parse_program();
-    let code = codegen.generate(&program);
+    let compiler_result = parser.parse_program();
+    let code = codegen.generate(&compiler_result.program, &compiler_result.vars);
 
     let mut child = std::process::Command::new("gcc")
         .arg("-x")

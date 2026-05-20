@@ -55,10 +55,12 @@ impl Lexer {
             '{' => Some(Token::LBrace),
             '}' => Some(Token::RBrace),
             ';' => Some(Token::Semicolon),
+            ',' => Some(Token::Comma),
             '+' => Some(Token::Plus),
             '-' => Some(Token::Minus),
             '*' => Some(Token::Star),
             '/' => Some(Token::Slash),
+            '=' => Some(Token::Assign),
             _ => None,
         };
         if token.is_some() {
@@ -88,6 +90,7 @@ impl Lexer {
         match &word[..] {
             "main" => Token::Main,
             "return" => Token::Return,
+            "auto" => Token::Auto,
             _ => Token::Identifier(word),
         }
     }
