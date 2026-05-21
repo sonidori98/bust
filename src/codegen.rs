@@ -7,13 +7,21 @@ use crate::{
 
 pub struct Codegen {
     output: String,
+    label_count: usize
 }
 
 impl Codegen {
     pub fn new() -> Self {
         Self {
             output: String::new(),
+            label_count: 0,
         }
+    }
+
+    fn new_label(&mut self) -> usize {
+        let label = self.label_count;
+        self.label_count += 1;
+        label
     }
 
     pub fn generate(&mut self, program: &Program, vars: &HashMap<String, i64>) -> String {
@@ -62,6 +70,21 @@ impl Codegen {
                     .push_str(&format!("    mov [rbp + {}], rax\n", offset));
             }
             Stmt::Declaration(_names) => {}
+            Stmt::If { cond, then_body } => {
+                let id = self.new_label();
+
+                self.generate_expression(cond, vars);
+                self.output.push_str("    pop rax\n");
+                self.output.push_str("    cmp rax, 0\n");
+
+                self.output.push_str(&format!("    je .L_IF_END_{}\n", id));
+
+                for stmt in then_body {
+                    self.generate_statement(&stmt, vars);
+                }
+
+                self.output.push_str(&format!(".L_IF_END_{}:\n", id));
+            }
         }
     }
 
@@ -259,6 +282,21 @@ main:
         assert!(code.contains("cmp rax, rdi"));
         assert!(code.contains("sete al"));
         assert!(code.contains("movzx rax, al"));
+    }
+
+    #[test]
+    fn test_codegen_if() {
+        let input = "main() { if (1 == 1) { return 42; } return 0; }";
+        let mut lexer = Lexer::new(input);
+        let mut parser = Parser::new(lexer.tokenize());
+        let cr = parser.parse_program();
+        let code = Codegen::new().generate(&cr.program, &cr.vars);
+
+        assert!(code.contains("cmp rax, 0"));
+        assert!(code.contains("je .L_IF_END_0"));
+        assert!(code.contains(".L_IF_END_0:"));
+        assert!(code.contains("mov rax, 42"));
+        assert!(code.contains("mov rax, 0"));
     }
 
     #[test]

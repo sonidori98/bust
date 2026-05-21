@@ -16,6 +16,7 @@ pub enum Stmt {
     Return(Expr),
     Declaration(Vec<String>),
     Assignment(String, Expr),
+    If { cond: Expr, then_body: Vec<Stmt> },
 }
 
 #[derive(Debug, Clone)]
