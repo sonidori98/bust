@@ -1,10 +1,11 @@
 #[derive(Debug, Clone, PartialEq)]
 pub enum Token {
-    Auto,         // "auto"
-    Main,         // "main"
-    Return,       // "return"
-    If,           // "if"
-    Integer(i64), // integer
+    Auto,
+    Main,
+    Return,
+    If,
+    Else,
+    Integer(i64),
     Plus,         // +
     Minus,        // -
     Star,         // *

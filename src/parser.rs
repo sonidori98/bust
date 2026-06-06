@@ -134,7 +134,22 @@ impl Parser {
                 } else {
                     then_body.push(self.parse_statement());
                 }
-                Stmt::If { cond, then_body }
+                let mut else_body = None;
+                if *self.peek_token() == Token::Else {
+                    self.consume(Token::Else);
+                    let mut body = Vec::new();
+                    if *self.peek_token() == Token::LBrace {
+                        self.consume(Token::LBrace);
+                        while *self.peek_token() != Token::RBrace {
+                            body.push(self.parse_statement());
+                        }
+                        self.consume(Token::RBrace);
+                    } else {
+                        body.push(self.parse_statement());
+                    }
+                    else_body = Some(body);
+                }
+                Stmt::If { cond, then_body, else_body }
             }
             _ => panic!("Unsupported statement: {:?}", token),
         }
@@ -392,13 +407,14 @@ mod tests {
         let func = &cr.program.functions[0];
         assert_eq!(func.body.len(), 2);
 
-        if let Stmt::If { cond, then_body } = &func.body[0] {
+        if let Stmt::If { cond, then_body, else_body } = &func.body[0] {
             if let Expr::Binary { op, .. } = cond {
                 assert_eq!(op, &Token::Equal);
             } else {
                 panic!("Expected Expr::Binary for IF condition");
             }
             assert_eq!(then_body.len(), 1);
+            assert!(else_body.is_none());
         } else {
             panic!("Expected Stmt::If");
         }
@@ -480,13 +496,36 @@ mod tests {
         let func = &cr.program.functions[0];
         assert_eq!(func.body.len(), 2);
 
-        if let Stmt::If { cond, then_body } = &func.body[0] {
+        if let Stmt::If { cond, then_body, else_body } = &func.body[0] {
             if let Expr::Binary { op, .. } = cond {
                 assert_eq!(op, &Token::Equal);
             } else {
                 panic!("Expected Expr::Binary for IF condition");
             }
             assert_eq!(then_body.len(), 1);
+            assert!(else_body.is_none());
+        } else {
+            panic!("Expected Stmt::If");
+        }
+    }
+
+    #[test]
+    fn test_parser_if_else_no_brace() {
+        let input = "main() { if (1 == 1) return 42; else return 0; }";
+
+        let mut lexer = Lexer::new(input);
+        let tokens = lexer.tokenize();
+
+        let mut parser = Parser::new(tokens);
+        let cr = parser.parse_program();
+
+        let func = &cr.program.functions[0];
+        assert_eq!(func.body.len(), 1);
+
+        if let Stmt::If { cond: _cond, then_body, else_body } = &func.body[0] {
+            assert_eq!(then_body.len(), 1);
+            assert!(else_body.is_some());
+            assert_eq!(else_body.as_ref().unwrap().len(), 1);
         } else {
             panic!("Expected Stmt::If");
         }

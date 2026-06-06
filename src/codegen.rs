@@ -7,7 +7,7 @@ use crate::{
 
 pub struct Codegen {
     output: String,
-    label_count: usize
+    label_count: usize,
 }
 
 impl Codegen {
@@ -70,20 +70,36 @@ impl Codegen {
                     .push_str(&format!("    mov [rbp + {}], rax\n", offset));
             }
             Stmt::Declaration(_names) => {}
-            Stmt::If { cond, then_body } => {
+            Stmt::If {
+                cond,
+                then_body,
+                else_body,
+            } => {
                 let id = self.new_label();
 
                 self.generate_expression(cond, vars);
                 self.output.push_str("    pop rax\n");
                 self.output.push_str("    cmp rax, 0\n");
 
-                self.output.push_str(&format!("    je .L_IF_END_{}\n", id));
+                if let Some(else_stmts) = else_body {
+                    self.output.push_str(&format!("    je .L_ELSE_{}\n", id));
+                    for stmt in then_body {
+                        self.generate_statement(&stmt, vars);
+                    }
+                    self.output.push_str(&format!("    jmp .L_END_{}\n", id));
 
-                for stmt in then_body {
-                    self.generate_statement(&stmt, vars);
+                    self.output.push_str(&format!(".L_ELSE_{}:\n", id));
+                    for stmt in else_stmts {
+                        self.generate_statement(&stmt, vars);
+                    }
+                    self.output.push_str(&format!(".L_END_{}:\n", id));
+                } else {
+                    self.output.push_str(&format!("    je .L_END_{}\n", id));
+                    for stmt in then_body {
+                        self.generate_statement(&stmt, vars);
+                    }
+                    self.output.push_str(&format!(".L_END_{}:\n", id));
                 }
-
-                self.output.push_str(&format!(".L_IF_END_{}:\n", id));
             }
         }
     }
@@ -293,8 +309,8 @@ main:
         let code = Codegen::new().generate(&cr.program, &cr.vars);
 
         assert!(code.contains("cmp rax, 0"));
-        assert!(code.contains("je .L_IF_END_0"));
-        assert!(code.contains(".L_IF_END_0:"));
+        assert!(code.contains("je .L_END_0"));
+        assert!(code.contains(".L_END_0:"));
         assert!(code.contains("mov rax, 42"));
         assert!(code.contains("mov rax, 0"));
     }
