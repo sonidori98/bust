@@ -123,13 +123,17 @@ impl Parser {
                 self.consume(Token::LParen);
                 let cond = self.parse_expression();
                 self.consume(Token::RParen);
-                self.consume(Token::LBrace);
 
                 let mut then_body = Vec::new();
-                while *self.peek_token() != Token::RBrace {
+                if *self.peek_token() == Token::LBrace {
+                    self.consume(Token::LBrace);
+                    while *self.peek_token() != Token::RBrace {
+                        then_body.push(self.parse_statement());
+                    }
+                    self.consume(Token::RBrace);
+                } else {
                     then_body.push(self.parse_statement());
                 }
-                self.consume(Token::RBrace);
                 Stmt::If { cond, then_body }
             }
             _ => panic!("Unsupported statement: {:?}", token),
@@ -460,6 +464,31 @@ mod tests {
             }
         } else {
             panic!("Expected Stmt::Return");
+        }
+    }
+
+    #[test]
+    fn test_parser_if_no_brace() {
+        let input = "main() { if (1 == 1) return 42; return 0; }";
+
+        let mut lexer = Lexer::new(input);
+        let tokens = lexer.tokenize();
+
+        let mut parser = Parser::new(tokens);
+        let cr = parser.parse_program();
+
+        let func = &cr.program.functions[0];
+        assert_eq!(func.body.len(), 2);
+
+        if let Stmt::If { cond, then_body } = &func.body[0] {
+            if let Expr::Binary { op, .. } = cond {
+                assert_eq!(op, &Token::Equal);
+            } else {
+                panic!("Expected Expr::Binary for IF condition");
+            }
+            assert_eq!(then_body.len(), 1);
+        } else {
+            panic!("Expected Stmt::If");
         }
     }
 }
