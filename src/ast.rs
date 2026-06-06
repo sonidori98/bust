@@ -9,6 +9,10 @@ pub enum Expr {
         left: Box<Expr>,
         right: Box<Expr>,
     },
+    Call {
+        name: String,
+        args: Vec<Expr>,
+    },
 }
 
 #[derive(Debug, Clone)]
@@ -25,6 +29,7 @@ pub enum Stmt {
         cond: Expr,
         body: Vec<Stmt>,
     },
+    Expr(Expr),
 }
 
 #[derive(Debug, Clone)]

@@ -121,6 +121,10 @@ impl Codegen {
                     .push_str(&format!("    jmp .L_WHILE_START_{}\n", id));
                 self.output.push_str(&format!(".L_WHILE_END_{}:\n", id));
             }
+            Stmt::Expr(expr) => {
+                self.generate_expression(expr, vars);
+                self.output.push_str("    pop rax\n");
+            }
         }
     }
 
@@ -189,6 +193,20 @@ impl Codegen {
                     }
                     _ => panic!("Unsupported operator: {:?}", op),
                 }
+                self.output.push_str("    push rax\n");
+            }
+            Expr::Call { name, args } => {
+                for arg in args {
+                    self.generate_expression(arg, vars);
+                }
+                let arg_regs = ["rdi", "rsi", "rdx", "rcx", "r8", "r9"];
+
+                let reg_args = std::cmp::min(args.len(), 6);
+                for i in (0..reg_args).rev() {
+                    self.output.push_str(&format!("    pop {}\n", arg_regs[i]));
+                }
+
+                self.output.push_str(&format!("    call {}\n", name));
                 self.output.push_str("    push rax\n");
             }
         }
@@ -361,5 +379,21 @@ main:
         assert!(code.contains("je .L_WHILE_END_0"));
         assert!(code.contains("jmp .L_WHILE_START_0"));
         assert!(code.contains(".L_WHILE_END_0:"));
+    }
+
+    #[test]
+    fn test_codegen_call() {
+        let input = "main() { return foo(1, 2); }";
+        let mut lexer = Lexer::new(input);
+        let mut parser = Parser::new(lexer.tokenize());
+        let cr = parser.parse_program();
+        let code = Codegen::new().generate(&cr.program, &cr.vars);
+
+        assert!(code.contains("mov rax, 1"));
+        assert!(code.contains("mov rax, 2"));
+        assert!(code.contains("pop rsi"));
+        assert!(code.contains("pop rdi"));
+        assert!(code.contains("call foo"));
+        assert!(code.contains("push rax"));
     }
 }

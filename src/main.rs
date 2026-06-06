@@ -21,6 +21,8 @@ struct Args {
     string: Option<String>,
     #[arg(short = 'o', value_name = "file", default_value = "a.out")]
     output: String,
+    #[arg(short = 'S', help = "Output assembly code instead of a binary")]
+    assembly: bool,
 }
 
 fn main() {
@@ -41,6 +43,17 @@ fn main() {
     let mut codegen = Codegen::new();
     let compiler_result = parser.parse_program();
     let code = codegen.generate(&compiler_result.program, &compiler_result.vars);
+
+    if args.assembly {
+        if args.output == "a.out" {
+            println!("{}", code);
+        } else {
+            let mut file = std::fs::File::create(&args.output).expect("Failed to create output file");
+            file.write_all(code.as_bytes())
+                .expect("Failed to write to output file");
+        }
+        return;
+    }
 
     let mut child = std::process::Command::new("gcc")
         .arg("-x")

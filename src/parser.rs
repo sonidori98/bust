@@ -101,9 +101,6 @@ impl Parser {
                 Stmt::Declaration(names)
             }
             Token::Identifier(name) => {
-                if !self.vars.contains_key(&name) {
-                    panic!("Undefined variable: {}", name);
-                }
                 self.next_token();
 
                 if *self.peek_token() == Token::Assign {
@@ -111,9 +108,25 @@ impl Parser {
                     let expr = self.parse_expression();
                     self.consume(Token::Semicolon);
                     Stmt::Assignment(name, expr)
+                } else if *self.peek_token() == Token::LParen {
+                    self.consume(Token::LParen);
+                    let mut args = Vec::new();
+                    if *self.peek_token() != Token::RParen {
+                        loop {
+                            args.push(self.parse_expression());
+                            if *self.peek_token() == Token::Comma {
+                                self.consume(Token::Comma);
+                            } else {
+                                break;
+                            }
+                        }
+                    }
+                    self.consume(Token::RParen);
+                    self.consume(Token::Semicolon);
+                    Stmt::Expr(Expr::Call { name, args })
                 } else {
                     panic!(
-                        "Expected '=' after identifier, but got {:?}",
+                        "Expected '=' or '(' after identifier, but got {:?}",
                         self.peek_token()
                     );
                 }
@@ -253,11 +266,29 @@ impl Parser {
                 Expr::Integer(val)
             }
             Token::Identifier(name) => {
-                if !self.vars.contains_key(&name) {
-                    panic!("Undefined variable: {}", name);
-                }
                 self.next_token();
-                Expr::Identifier(name)
+                if *self.peek_token() == Token::LParen {
+                    self.consume(Token::LParen);
+                    let mut args = Vec::new();
+
+                    if *self.peek_token() != Token::RParen {
+                        loop {
+                            args.push(self.parse_expression());
+                            if *self.peek_token() == Token::Comma {
+                                self.consume(Token::Comma);
+                            } else {
+                                break;
+                            }
+                        }
+                    }
+                    self.consume(Token::RParen);
+                    Expr::Call { name, args }
+                } else {
+                    if !self.vars.contains_key(&name) {
+                        panic!("Undefined variable: {}", name);
+                    }
+                    Expr::Identifier(name)
+                }
             }
             Token::LParen => {
                 self.consume(Token::LParen);
@@ -602,6 +633,29 @@ mod tests {
             assert_eq!(body.len(), 1);
         } else {
             panic!("Expected Stmt::While");
+        }
+    }
+
+    #[test]
+    fn test_parser_call() {
+        let input = "main() { return foo(1, 2 + 3); }";
+
+        let mut lexer = Lexer::new(input);
+        let tokens = lexer.tokenize();
+
+        let mut parser = Parser::new(tokens);
+        let cr = parser.parse_program();
+
+        let func = &cr.program.functions[0];
+        if let Stmt::Return(expr) = &func.body[0] {
+            if let Expr::Call { name, args } = expr {
+                assert_eq!(name, "foo");
+                assert_eq!(args.len(), 2);
+            } else {
+                panic!("Expected Expr::Call");
+            }
+        } else {
+            panic!("Expected Stmt::Return");
         }
     }
 }
