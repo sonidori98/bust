@@ -5,6 +5,7 @@ pub enum Token {
     Return,
     If,
     Else,
+    While,
     Integer(i64),
     Plus,         // +
     Minus,        // -

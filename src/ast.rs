@@ -16,7 +16,15 @@ pub enum Stmt {
     Return(Expr),
     Declaration(Vec<String>),
     Assignment(String, Expr),
-    If { cond: Expr, then_body: Vec<Stmt>, else_body: Option<Vec<Stmt>> },
+    If {
+        cond: Expr,
+        then_body: Vec<Stmt>,
+        else_body: Option<Vec<Stmt>>,
+    },
+    While {
+        cond: Expr,
+        body: Vec<Stmt>,
+    },
 }
 
 #[derive(Debug, Clone)]

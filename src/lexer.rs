@@ -157,6 +157,7 @@ impl<'a> Lexer<'a> {
             "auto" => Token::Auto,
             "if" => Token::If,
             "else" => Token::Else,
+            "while" => Token::While,
             _ => Token::Identifier(word),
         }
     }

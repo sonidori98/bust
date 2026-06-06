@@ -149,7 +149,30 @@ impl Parser {
                     }
                     else_body = Some(body);
                 }
-                Stmt::If { cond, then_body, else_body }
+                Stmt::If {
+                    cond,
+                    then_body,
+                    else_body,
+                }
+            }
+            Token::While => {
+                self.consume(Token::While);
+                self.consume(Token::LParen);
+                let cond = self.parse_expression();
+                self.consume(Token::RParen);
+
+                let mut body = Vec::new();
+                if *self.peek_token() == Token::LBrace {
+                    self.consume(Token::LBrace);
+                    while *self.peek_token() != Token::RBrace {
+                        body.push(self.parse_statement());
+                    }
+                    self.consume(Token::RBrace);
+                } else {
+                    body.push(self.parse_statement());
+                }
+
+                Stmt::While { cond, body }
             }
             _ => panic!("Unsupported statement: {:?}", token),
         }
@@ -407,7 +430,12 @@ mod tests {
         let func = &cr.program.functions[0];
         assert_eq!(func.body.len(), 2);
 
-        if let Stmt::If { cond, then_body, else_body } = &func.body[0] {
+        if let Stmt::If {
+            cond,
+            then_body,
+            else_body,
+        } = &func.body[0]
+        {
             if let Expr::Binary { op, .. } = cond {
                 assert_eq!(op, &Token::Equal);
             } else {
@@ -496,7 +524,12 @@ mod tests {
         let func = &cr.program.functions[0];
         assert_eq!(func.body.len(), 2);
 
-        if let Stmt::If { cond, then_body, else_body } = &func.body[0] {
+        if let Stmt::If {
+            cond,
+            then_body,
+            else_body,
+        } = &func.body[0]
+        {
             if let Expr::Binary { op, .. } = cond {
                 assert_eq!(op, &Token::Equal);
             } else {
@@ -522,12 +555,53 @@ mod tests {
         let func = &cr.program.functions[0];
         assert_eq!(func.body.len(), 1);
 
-        if let Stmt::If { cond: _cond, then_body, else_body } = &func.body[0] {
+        if let Stmt::If {
+            cond: _cond,
+            then_body,
+            else_body,
+        } = &func.body[0]
+        {
             assert_eq!(then_body.len(), 1);
             assert!(else_body.is_some());
             assert_eq!(else_body.as_ref().unwrap().len(), 1);
         } else {
             panic!("Expected Stmt::If");
+        }
+    }
+
+    #[test]
+    fn test_parser_while() {
+        let input = "main() { while (1) { return 42; } }";
+
+        let mut lexer = Lexer::new(input);
+        let tokens = lexer.tokenize();
+
+        let mut parser = Parser::new(tokens);
+        let cr = parser.parse_program();
+
+        let func = &cr.program.functions[0];
+        if let Stmt::While { cond: _, body } = &func.body[0] {
+            assert_eq!(body.len(), 1);
+        } else {
+            panic!("Expected Stmt::While");
+        }
+    }
+
+    #[test]
+    fn test_parser_while_no_brace() {
+        let input = "main() { while (1) return 42; }";
+
+        let mut lexer = Lexer::new(input);
+        let tokens = lexer.tokenize();
+
+        let mut parser = Parser::new(tokens);
+        let cr = parser.parse_program();
+
+        let func = &cr.program.functions[0];
+        if let Stmt::While { cond: _, body } = &func.body[0] {
+            assert_eq!(body.len(), 1);
+        } else {
+            panic!("Expected Stmt::While");
         }
     }
 }

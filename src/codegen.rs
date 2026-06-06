@@ -101,6 +101,26 @@ impl Codegen {
                     self.output.push_str(&format!(".L_END_{}:\n", id));
                 }
             }
+            Stmt::While { cond, body } => {
+                let id = self.new_label();
+
+                self.output.push_str(&format!(".L_WHILE_START_{}:\n", id));
+
+                self.generate_expression(cond, vars);
+                self.output.push_str("    pop rax\n");
+                self.output.push_str("    cmp rax, 0\n");
+
+                self.output
+                    .push_str(&format!("    je .L_WHILE_END_{}\n", id));
+
+                for stmt in body {
+                    self.generate_statement(&stmt, vars);
+                }
+
+                self.output
+                    .push_str(&format!("    jmp .L_WHILE_START_{}\n", id));
+                self.output.push_str(&format!(".L_WHILE_END_{}:\n", id));
+            }
         }
     }
 
@@ -327,5 +347,19 @@ main:
         assert!(code.contains("add rax, rdi"));
         assert!(code.contains("[rbp + -16]"));
         assert!(code.contains("[rbp + -24]"));
+    }
+
+    #[test]
+    fn test_codegen_while() {
+        let input = "main() { auto x; x = 0; while (x < 10) x = x + 1; return x; }";
+        let mut lexer = Lexer::new(input);
+        let mut parser = Parser::new(lexer.tokenize());
+        let cr = parser.parse_program();
+        let code = Codegen::new().generate(&cr.program, &cr.vars);
+
+        assert!(code.contains(".L_WHILE_START_0:"));
+        assert!(code.contains("je .L_WHILE_END_0"));
+        assert!(code.contains("jmp .L_WHILE_START_0"));
+        assert!(code.contains(".L_WHILE_END_0:"));
     }
 }
