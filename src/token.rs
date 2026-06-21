@@ -40,6 +40,8 @@ pub enum Token {
     GreaterEqualAssign, // =>=
     LessEqualAssign,    // =<=
     Not,                // !
+    Increment,          // ++
+    Decrement,          // --
     LParen,             // '('
     RParen,             // ')'
     LBrace,             // '{'

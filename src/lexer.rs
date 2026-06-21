@@ -75,11 +75,21 @@ impl<'a> Lexer<'a> {
             }
             '+' => {
                 self.iter.next();
-                Some(Token::Plus)
+                if self.iter.peek() == Some(&'+') {
+                    self.iter.next();
+                    Some(Token::Increment)
+                } else {
+                    Some(Token::Plus)
+                }
             }
             '-' => {
                 self.iter.next();
-                Some(Token::Minus)
+                if self.iter.peek() == Some(&'-') {
+                    self.iter.next();
+                    Some(Token::Decrement)
+                } else {
+                    Some(Token::Minus)
+                }
             }
             '*' => {
                 self.iter.next();
@@ -310,6 +320,75 @@ mod tests {
                 Token::RParen,
                 Token::Star,
                 Token::Integer(3),
+                Token::Eof
+            ],
+            lexer.tokenize()
+        );
+    }
+
+    #[test]
+    fn test_lexer_increment_decrement() {
+        let input = "x++ y-- ++z --w";
+        let mut lexer = Lexer::new(input);
+
+        assert_eq!(
+            vec![
+                Token::Identifier("x".to_string()),
+                Token::Increment,
+                Token::Identifier("y".to_string()),
+                Token::Decrement,
+                Token::Increment,
+                Token::Identifier("z".to_string()),
+                Token::Decrement,
+                Token::Identifier("w".to_string()),
+                Token::Eof
+            ],
+            lexer.tokenize()
+        );
+    }
+
+    #[test]
+    fn test_lexer_not() {
+        let input = "!x";
+        let mut lexer = Lexer::new(input);
+
+        assert_eq!(
+            vec![Token::Not, Token::Identifier("x".to_string()), Token::Eof],
+            lexer.tokenize()
+        );
+    }
+
+    #[test]
+    fn test_lexer_compound_assign() {
+        let input = "x = 1 x == 2 x === 3 x =!= 4 x =< 5 x => 6 x =>= 7 x =<= 8";
+        let mut lexer = Lexer::new(input);
+
+        assert_eq!(
+            vec![
+                Token::Identifier("x".to_string()),
+                Token::Assign,
+                Token::Integer(1),
+                Token::Identifier("x".to_string()),
+                Token::Equal,
+                Token::Integer(2),
+                Token::Identifier("x".to_string()),
+                Token::EqualAssign,
+                Token::Integer(3),
+                Token::Identifier("x".to_string()),
+                Token::NotEqualAssign,
+                Token::Integer(4),
+                Token::Identifier("x".to_string()),
+                Token::LessAssign,
+                Token::Integer(5),
+                Token::Identifier("x".to_string()),
+                Token::GreaterAssign,
+                Token::Integer(6),
+                Token::Identifier("x".to_string()),
+                Token::GreaterEqualAssign,
+                Token::Integer(7),
+                Token::Identifier("x".to_string()),
+                Token::LessEqualAssign,
+                Token::Integer(8),
                 Token::Eof
             ],
             lexer.tokenize()

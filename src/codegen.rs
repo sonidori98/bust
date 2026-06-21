@@ -263,8 +263,61 @@ impl Codegen {
                     self.output.push_str("    movzx rax, al\n");
                     self.output.push_str("    push rax\n");
                 }
+                Token::Minus => {
+                    self.generate_expression(expr, locals, globals);
+                    self.output.push_str("    pop rax\n");
+                    self.output.push_str("    neg rax\n");
+                    self.output.push_str("    push rax\n");
+                }
                 _ => panic!("Unsupported unary operator: {:?}", op),
             },
+            Expr::Prefix { op, name } => {
+                self.generate_expression(
+                    &Expr::Identifier(name.clone()),
+                    locals,
+                    globals,
+                );
+                if *op == Token::Increment {
+                    self.output.push_str("    pop rax\n");
+                    self.output.push_str("    add rax, 1\n");
+                } else {
+                    self.output.push_str("    pop rax\n");
+                    self.output.push_str("    sub rax, 1\n");
+                }
+                self.output.push_str("    push rax\n");
+                if let Some(offset) = locals.get(name) {
+                    self.output
+                        .push_str(&format!("    mov [rbp + {}], rax\n", offset));
+                } else if let Some(label) = globals.get(name) {
+                    self.output
+                        .push_str(&format!("    mov [rip + {}], rax\n", label));
+                } else {
+                    panic!("Undefined variable: {}", name);
+                }
+            }
+            Expr::Postfix { op, name } => {
+                self.generate_expression(
+                    &Expr::Identifier(name.clone()),
+                    locals,
+                    globals,
+                );
+                self.output.push_str("    pop rax\n");
+                self.output.push_str("    push rax\n");
+                if *op == Token::Increment {
+                    self.output.push_str("    add rax, 1\n");
+                } else {
+                    self.output.push_str("    sub rax, 1\n");
+                }
+                if let Some(offset) = locals.get(name) {
+                    self.output
+                        .push_str(&format!("    mov [rbp + {}], rax\n", offset));
+                } else if let Some(label) = globals.get(name) {
+                    self.output
+                        .push_str(&format!("    mov [rip + {}], rax\n", label));
+                } else {
+                    panic!("Undefined variable: {}", name);
+                }
+            }
             Expr::Call { name, args } => {
                 for arg in args {
                     self.generate_expression(arg, locals, globals);
@@ -587,6 +640,141 @@ main:
         let code = Codegen::new().generate(&cr);
         assert!(code.contains("mov rcx, rdi"));
         assert!(code.contains("sar rax, cl"));
+    }
+
+    #[test]
+    fn test_codegen_prefix_increment() {
+        let input = "main() { auto x; x = 0; ++x; return x; }";
+        let mut lexer = Lexer::new(input);
+        let mut parser = Parser::new(lexer.tokenize());
+        let cr = parser.parse_program();
+        let code = Codegen::new().generate(&cr);
+
+        assert!(code.contains("add rax, 1"));
+        assert!(code.contains("mov [rbp + -16], rax"));
+    }
+
+    #[test]
+    fn test_codegen_postfix_increment() {
+        let input = "main() { auto x; x = 0; x++; return x; }";
+        let mut lexer = Lexer::new(input);
+        let mut parser = Parser::new(lexer.tokenize());
+        let cr = parser.parse_program();
+        let code = Codegen::new().generate(&cr);
+
+        assert!(code.contains("add rax, 1"));
+        assert!(code.contains("mov [rbp + -16], rax"));
+    }
+
+    #[test]
+    fn test_codegen_prefix_decrement() {
+        let input = "main() { auto x; x = 0; --x; return x; }";
+        let mut lexer = Lexer::new(input);
+        let mut parser = Parser::new(lexer.tokenize());
+        let cr = parser.parse_program();
+        let code = Codegen::new().generate(&cr);
+
+        assert!(code.contains("sub rax, 1"));
+        assert!(code.contains("mov [rbp + -16], rax"));
+    }
+
+    #[test]
+    fn test_codegen_postfix_decrement() {
+        let input = "main() { auto x; x = 0; x--; return x; }";
+        let mut lexer = Lexer::new(input);
+        let mut parser = Parser::new(lexer.tokenize());
+        let cr = parser.parse_program();
+        let code = Codegen::new().generate(&cr);
+
+        assert!(code.contains("sub rax, 1"));
+        assert!(code.contains("mov [rbp + -16], rax"));
+    }
+
+    #[test]
+    fn test_codegen_prefix_inc_in_expr() {
+        let input = "main() { auto x; x = 0; return ++x; }";
+        let mut lexer = Lexer::new(input);
+        let mut parser = Parser::new(lexer.tokenize());
+        let cr = parser.parse_program();
+        let code = Codegen::new().generate(&cr);
+
+        assert!(code.contains("add rax, 1"));
+        assert!(code.contains("mov [rbp + -16], rax"));
+    }
+
+    #[test]
+    fn test_codegen_postfix_inc_in_expr() {
+        let input = "main() { auto x; x = 0; return x++; }";
+        let mut lexer = Lexer::new(input);
+        let mut parser = Parser::new(lexer.tokenize());
+        let cr = parser.parse_program();
+        let code = Codegen::new().generate(&cr);
+
+        assert!(code.contains("add rax, 1"));
+        assert!(code.contains("mov [rbp + -16], rax"));
+    }
+
+    #[test]
+    fn test_codegen_incdec_global() {
+        let input = "extrn x; main() { ++x; x--; return x; }";
+        let mut lexer = Lexer::new(input);
+        let mut parser = Parser::new(lexer.tokenize());
+        let cr = parser.parse_program();
+        let code = Codegen::new().generate(&cr);
+
+        assert!(code.contains("add rax, 1"));
+        assert!(code.contains("sub rax, 1"));
+        let count_add = code.matches("add rax, 1").count();
+        let count_sub = code.matches("sub rax, 1").count();
+        assert!(count_add >= 1);
+        assert!(count_sub >= 1);
+        assert!(code.contains("mov [rip + .x], rax"));
+    }
+
+    #[test]
+    fn test_codegen_negate_literal() {
+        let input = "main() { return -42; }";
+        let mut lexer = Lexer::new(input);
+        let mut parser = Parser::new(lexer.tokenize());
+        let cr = parser.parse_program();
+        let code = Codegen::new().generate(&cr);
+
+        assert!(code.contains("neg rax"));
+    }
+
+    #[test]
+    fn test_codegen_negate_var() {
+        let input = "main() { auto x; x = 10; return -x; }";
+        let mut lexer = Lexer::new(input);
+        let mut parser = Parser::new(lexer.tokenize());
+        let cr = parser.parse_program();
+        let code = Codegen::new().generate(&cr);
+
+        assert!(code.contains("neg rax"));
+    }
+
+    #[test]
+    fn test_codegen_negate_binary() {
+        let input = "main() { auto x; x = 10; return -(x + 5); }";
+        let mut lexer = Lexer::new(input);
+        let mut parser = Parser::new(lexer.tokenize());
+        let cr = parser.parse_program();
+        let code = Codegen::new().generate(&cr);
+
+        assert!(code.contains("neg rax"));
+    }
+
+    #[test]
+    fn test_codegen_unary_not() {
+        let input = "main() { auto x; x = 0; return !x; }";
+        let mut lexer = Lexer::new(input);
+        let mut parser = Parser::new(lexer.tokenize());
+        let cr = parser.parse_program();
+        let code = Codegen::new().generate(&cr);
+
+        assert!(code.contains("cmp rax, 0"));
+        assert!(code.contains("sete al"));
+        assert!(code.contains("movzx rax, al"));
     }
 
     #[test]

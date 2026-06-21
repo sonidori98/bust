@@ -17,6 +17,14 @@ pub enum Expr {
         op: Token,
         expr: Box<Expr>,
     },
+    Prefix {
+        op: Token,
+        name: String,
+    },
+    Postfix {
+        op: Token,
+        name: String,
+    },
 }
 
 #[derive(Debug, Clone)]

@@ -186,6 +186,26 @@ impl Parser {
                         right: Box::new(rhs),
                     };
                     Stmt::Assignment(name, desugared)
+                } else if *self.peek_token() == Token::Increment {
+                    if !self.vars.contains_key(&name) && !self.global_vars.contains_key(&name) {
+                        panic!("Undefined variable: {}", name);
+                    }
+                    self.next_token();
+                    self.consume(Token::Semicolon);
+                    Stmt::Expr(Expr::Postfix {
+                        op: Token::Increment,
+                        name,
+                    })
+                } else if *self.peek_token() == Token::Decrement {
+                    if !self.vars.contains_key(&name) && !self.global_vars.contains_key(&name) {
+                        panic!("Undefined variable: {}", name);
+                    }
+                    self.next_token();
+                    self.consume(Token::Semicolon);
+                    Stmt::Expr(Expr::Postfix {
+                        op: Token::Decrement,
+                        name,
+                    })
                 } else if *self.peek_token() == Token::LParen {
                     self.consume(Token::LParen);
                     let mut args = Vec::new();
@@ -244,6 +264,36 @@ impl Parser {
                     cond,
                     then_body,
                     else_body,
+                }
+            }
+            Token::Increment => {
+                self.next_token();
+                if let Token::Identifier(name) = self.next_token() {
+                    if !self.vars.contains_key(&name) && !self.global_vars.contains_key(&name) {
+                        panic!("Undefined variable: {}", name);
+                    }
+                    self.consume(Token::Semicolon);
+                    Stmt::Expr(Expr::Prefix {
+                        op: Token::Increment,
+                        name,
+                    })
+                } else {
+                    panic!("Expected identifier after '++'");
+                }
+            }
+            Token::Decrement => {
+                self.next_token();
+                if let Token::Identifier(name) = self.next_token() {
+                    if !self.vars.contains_key(&name) && !self.global_vars.contains_key(&name) {
+                        panic!("Undefined variable: {}", name);
+                    }
+                    self.consume(Token::Semicolon);
+                    Stmt::Expr(Expr::Prefix {
+                        op: Token::Decrement,
+                        name,
+                    })
+                } else {
+                    panic!("Expected identifier after '--'");
                 }
             }
             Token::While => {
@@ -391,6 +441,36 @@ impl Parser {
                     expr: Box::new(expr),
                 }
             }
+            Token::Minus => {
+                self.next_token();
+                let expr = self.parse_unary();
+                Expr::Unary {
+                    op: Token::Minus,
+                    expr: Box::new(expr),
+                }
+            }
+            Token::Increment => {
+                self.next_token();
+                let expr = self.parse_unary();
+                match expr {
+                    Expr::Identifier(name) => Expr::Prefix {
+                        op: Token::Increment,
+                        name,
+                    },
+                    _ => panic!("Invalid operand for '++'"),
+                }
+            }
+            Token::Decrement => {
+                self.next_token();
+                let expr = self.parse_unary();
+                match expr {
+                    Expr::Identifier(name) => Expr::Prefix {
+                        op: Token::Decrement,
+                        name,
+                    },
+                    _ => panic!("Invalid operand for '--'"),
+                }
+            }
             _ => self.parse_primary(),
         }
     }
@@ -404,7 +484,25 @@ impl Parser {
             }
             Token::Identifier(name) => {
                 self.next_token();
-                if *self.peek_token() == Token::LParen {
+                if *self.peek_token() == Token::Increment {
+                    if !self.vars.contains_key(&name) && !self.global_vars.contains_key(&name) {
+                        panic!("Undefined variable: {}", name);
+                    }
+                    self.next_token();
+                    Expr::Postfix {
+                        op: Token::Increment,
+                        name,
+                    }
+                } else if *self.peek_token() == Token::Decrement {
+                    if !self.vars.contains_key(&name) && !self.global_vars.contains_key(&name) {
+                        panic!("Undefined variable: {}", name);
+                    }
+                    self.next_token();
+                    Expr::Postfix {
+                        op: Token::Decrement,
+                        name,
+                    }
+                } else if *self.peek_token() == Token::LParen {
                     self.consume(Token::LParen);
                     let mut args = Vec::new();
 
@@ -938,5 +1036,244 @@ mod tests {
         } else {
             panic!("Expected desugared Assignment");
         }
+    }
+
+    #[test]
+    fn test_parser_less_assign() {
+        let stmt = parse_one("main() { auto x; x =< 5; }");
+        if let Stmt::Assignment(name, Expr::Binary { op, left, right }) = stmt {
+            assert_eq!(name, "x");
+            assert_eq!(op, Token::LessThan);
+            assert!(matches!(*left, Expr::Identifier(ref n) if n == "x"));
+            assert!(matches!(*right, Expr::Integer(5)));
+        } else {
+            panic!("Expected desugared Assignment");
+        }
+    }
+
+    #[test]
+    fn test_parser_greater_assign() {
+        let stmt = parse_one("main() { auto x; x => 5; }");
+        if let Stmt::Assignment(name, Expr::Binary { op, left, right }) = stmt {
+            assert_eq!(name, "x");
+            assert_eq!(op, Token::GreaterThan);
+            assert!(matches!(*left, Expr::Identifier(ref n) if n == "x"));
+            assert!(matches!(*right, Expr::Integer(5)));
+        } else {
+            panic!("Expected desugared Assignment");
+        }
+    }
+
+    #[test]
+    fn test_parser_equal_assign() {
+        let stmt = parse_one("main() { auto x; x === 5; }");
+        if let Stmt::Assignment(name, Expr::Binary { op, left, right }) = stmt {
+            assert_eq!(name, "x");
+            assert_eq!(op, Token::Equal);
+            assert!(matches!(*left, Expr::Identifier(ref n) if n == "x"));
+            assert!(matches!(*right, Expr::Integer(5)));
+        } else {
+            panic!("Expected desugared Assignment");
+        }
+    }
+
+    #[test]
+    fn test_parser_not_equal_assign() {
+        let stmt = parse_one("main() { auto x; x =!= 5; }");
+        if let Stmt::Assignment(name, Expr::Binary { op, left, right }) = stmt {
+            assert_eq!(name, "x");
+            assert_eq!(op, Token::NotEqual);
+            assert!(matches!(*left, Expr::Identifier(ref n) if n == "x"));
+            assert!(matches!(*right, Expr::Integer(5)));
+        } else {
+            panic!("Expected desugared Assignment");
+        }
+    }
+
+    #[test]
+    fn test_parser_greater_equal_assign() {
+        let stmt = parse_one("main() { auto x; x =>= 5; }");
+        if let Stmt::Assignment(name, Expr::Binary { op, left, right }) = stmt {
+            assert_eq!(name, "x");
+            assert_eq!(op, Token::GreaterEqual);
+            assert!(matches!(*left, Expr::Identifier(ref n) if n == "x"));
+            assert!(matches!(*right, Expr::Integer(5)));
+        } else {
+            panic!("Expected desugared Assignment");
+        }
+    }
+
+    #[test]
+    fn test_parser_less_equal_assign() {
+        let stmt = parse_one("main() { auto x; x =<= 5; }");
+        if let Stmt::Assignment(name, Expr::Binary { op, left, right }) = stmt {
+            assert_eq!(name, "x");
+            assert_eq!(op, Token::LessEqual);
+            assert!(matches!(*left, Expr::Identifier(ref n) if n == "x"));
+            assert!(matches!(*right, Expr::Integer(5)));
+        } else {
+            panic!("Expected desugared Assignment");
+        }
+    }
+
+    // --- Increment / Decrement tests ---
+
+    fn body(index: usize, input: &str) -> Stmt {
+        let mut lexer = Lexer::new(input);
+        let mut parser = Parser::new(lexer.tokenize());
+        let program = parser.parse_program();
+        program.functions[0].body[index].clone()
+    }
+
+    #[test]
+    fn test_parser_postfix_increment() {
+        let stmt = body(1, "main() { auto x; x++; return x; }");
+        if let Stmt::Expr(Expr::Postfix { op, name }) = stmt {
+            assert_eq!(op, Token::Increment);
+            assert_eq!(name, "x");
+        } else {
+            panic!("Expected Stmt::Expr(Expr::Postfix(Increment))");
+        }
+    }
+
+    #[test]
+    fn test_parser_postfix_decrement() {
+        let stmt = body(1, "main() { auto x; x--; return x; }");
+        if let Stmt::Expr(Expr::Postfix { op, name }) = stmt {
+            assert_eq!(op, Token::Decrement);
+            assert_eq!(name, "x");
+        } else {
+            panic!("Expected Stmt::Expr(Expr::Postfix(Decrement))");
+        }
+    }
+
+    #[test]
+    fn test_parser_prefix_increment() {
+        let stmt = body(1, "main() { auto x; ++x; return x; }");
+        if let Stmt::Expr(Expr::Prefix { op, name }) = stmt {
+            assert_eq!(op, Token::Increment);
+            assert_eq!(name, "x");
+        } else {
+            panic!("Expected Stmt::Expr(Expr::Prefix(Increment))");
+        }
+    }
+
+    #[test]
+    fn test_parser_prefix_decrement() {
+        let stmt = body(1, "main() { auto x; --x; return x; }");
+        if let Stmt::Expr(Expr::Prefix { op, name }) = stmt {
+            assert_eq!(op, Token::Decrement);
+            assert_eq!(name, "x");
+        } else {
+            panic!("Expected Stmt::Expr(Expr::Prefix(Decrement))");
+        }
+    }
+
+    #[test]
+    fn test_parser_postfix_in_expr() {
+        let stmt = body(3, "main() { auto x; x = 1; x = x++; return x++; }");
+        if let Stmt::Return(Expr::Postfix { op, name }) = stmt {
+            assert_eq!(op, Token::Increment);
+            assert_eq!(name, "x");
+        } else {
+            panic!("Expected return with Postfix(Increment)");
+        }
+    }
+
+    #[test]
+    fn test_parser_prefix_in_expr() {
+        let stmt = body(3, "main() { auto x; x = 1; x = ++x; return ++x; }");
+        if let Stmt::Return(Expr::Prefix { op, name }) = stmt {
+            assert_eq!(op, Token::Increment);
+            assert_eq!(name, "x");
+        } else {
+            panic!("Expected return with Prefix(Increment)");
+        }
+    }
+
+    #[test]
+    fn test_parser_incdec_global() {
+        let input = "extrn x; main() { ++x; x--; return x; }";
+        let mut lexer = Lexer::new(input);
+        let mut parser = Parser::new(lexer.tokenize());
+        let program = parser.parse_program();
+        assert!(program.globals.contains_key("x"));
+        let body = &program.functions[0].body;
+        assert_eq!(body.len(), 3);
+        if let Stmt::Expr(Expr::Prefix { op, .. }) = &body[0] {
+            assert_eq!(*op, Token::Increment);
+        } else {
+            panic!("Expected prefix increment");
+        }
+        if let Stmt::Expr(Expr::Postfix { op, .. }) = &body[1] {
+            assert_eq!(*op, Token::Decrement);
+        } else {
+            panic!("Expected postfix decrement");
+        }
+    }
+
+    #[test]
+    fn test_parser_unary_minus() {
+        let stmt = body(1, "main() { auto x; x = -1; }");
+        if let Stmt::Assignment(name, Expr::Unary { op, expr }) = stmt {
+            assert_eq!(name, "x");
+            assert_eq!(op, Token::Minus);
+            assert!(matches!(*expr, Expr::Integer(1)));
+        } else {
+            panic!("Expected Stmt::Assignment with Unary(Minus)");
+        }
+    }
+
+    #[test]
+    fn test_parser_unary_minus_chain() {
+        let stmt = body(1, "main() { auto x; x = - -1; }");
+        if let Stmt::Assignment(name, Expr::Unary { op, expr }) = stmt {
+            assert_eq!(name, "x");
+            assert_eq!(op, Token::Minus);
+            assert!(matches!(*expr, Expr::Unary { op: Token::Minus, .. }));
+        } else {
+            panic!("Expected double unary minus");
+        }
+    }
+
+    #[test]
+    fn test_parser_unary_minus_expr() {
+        let stmt = body(1, "main() { auto x, y; x = -(y + 1); }");
+        if let Stmt::Assignment(name, Expr::Unary { op, expr }) = stmt {
+            assert_eq!(name, "x");
+            assert_eq!(op, Token::Minus);
+            assert!(matches!(*expr, Expr::Binary { .. }));
+        } else {
+            panic!("Expected unary minus of parenthesized expr");
+        }
+    }
+
+    #[test]
+    fn test_parser_unary_not() {
+        let stmt = body(1, "main() { auto x; return !x; }");
+        if let Stmt::Return(Expr::Unary { op, expr }) = stmt {
+            assert_eq!(op, Token::Not);
+            assert!(matches!(*expr, Expr::Identifier(ref n) if n == "x"));
+        } else {
+            panic!("Expected Stmt::Return(Expr::Unary(Not))");
+        }
+    }
+
+    #[test]
+    #[should_panic(expected = "Undefined variable")]
+    fn test_parser_incdec_undefined_var_postfix() {
+        let input = "main() { y++; }";
+        let mut lexer = Lexer::new(input);
+        let mut parser = Parser::new(lexer.tokenize());
+        parser.parse_program();
+    }
+
+    #[test]
+    #[should_panic(expected = "Undefined variable")]
+    fn test_parser_incdec_undefined_var_prefix() {
+        let input = "main() { ++y; }";
+        let mut lexer = Lexer::new(input);
+        let mut parser = Parser::new(lexer.tokenize());
+        parser.parse_program();
     }
 }
