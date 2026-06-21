@@ -7,6 +7,7 @@ use crate::{
 
 pub struct Codegen {
     output: String,
+    current_func_name: String,
     label_count: usize,
 }
 
@@ -14,6 +15,7 @@ impl Codegen {
     pub fn new() -> Self {
         Self {
             output: String::new(),
+            current_func_name: String::new(),
             label_count: 0,
         }
     }
@@ -33,6 +35,7 @@ impl Codegen {
         }
 
         for func in &program.functions {
+            self.current_func_name = func.name.clone();
             self.generate_function(func, &program.globals);
         }
 
@@ -99,6 +102,14 @@ impl Codegen {
                 }
             }
             Stmt::Declaration(_names) => {}
+            Stmt::Label(name) => {
+                self.output
+                    .push_str(&format!(".L{}_{}:\n", self.current_func_name, name));
+            }
+            Stmt::Goto(name) => {
+                self.output
+                    .push_str(&format!("    jmp .L{}_{}\n", self.current_func_name, name));
+            }
             Stmt::If {
                 cond,
                 then_body,
@@ -272,11 +283,7 @@ impl Codegen {
                 _ => panic!("Unsupported unary operator: {:?}", op),
             },
             Expr::Prefix { op, name } => {
-                self.generate_expression(
-                    &Expr::Identifier(name.clone()),
-                    locals,
-                    globals,
-                );
+                self.generate_expression(&Expr::Identifier(name.clone()), locals, globals);
                 if *op == Token::Increment {
                     self.output.push_str("    pop rax\n");
                     self.output.push_str("    add rax, 1\n");
@@ -296,11 +303,7 @@ impl Codegen {
                 }
             }
             Expr::Postfix { op, name } => {
-                self.generate_expression(
-                    &Expr::Identifier(name.clone()),
-                    locals,
-                    globals,
-                );
+                self.generate_expression(&Expr::Identifier(name.clone()), locals, globals);
                 self.output.push_str("    pop rax\n");
                 self.output.push_str("    push rax\n");
                 if *op == Token::Increment {
@@ -729,6 +732,37 @@ main:
         assert!(count_add >= 1);
         assert!(count_sub >= 1);
         assert!(code.contains("mov [rip + .x], rax"));
+    }
+
+    #[test]
+    fn test_codegen_goto_label() {
+        let input = "main() { auto x; x = 0; loop: x = x + 1; if (x < 10) goto loop; return x; }";
+        let mut lexer = Lexer::new(input);
+        let mut parser = Parser::new(lexer.tokenize());
+        let cr = parser.parse_program();
+        let code = Codegen::new().generate(&cr);
+
+        assert!(code.contains(".Lmain_loop:"));
+        assert!(code.contains("jmp .Lmain_loop"));
+        assert!(code.contains("cmp rax, 0"));
+    }
+
+    #[test]
+    fn test_codegen_goto_label_multi_function() {
+        let input = "
+            first() { start: goto end; end: return 0; }
+            second() { top: goto top; }
+        ";
+        let mut lexer = Lexer::new(input);
+        let mut parser = Parser::new(lexer.tokenize());
+        let cr = parser.parse_program();
+        let code = Codegen::new().generate(&cr);
+
+        assert!(code.contains(".Lfirst_start:"));
+        assert!(code.contains("jmp .Lfirst_end"));
+        assert!(code.contains(".Lfirst_end:"));
+        assert!(code.contains(".Lsecond_top:"));
+        assert!(code.contains("jmp .Lsecond_top"));
     }
 
     #[test]

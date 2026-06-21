@@ -32,6 +32,8 @@ pub enum Stmt {
     Return(Expr),
     Declaration(Vec<String>),
     Assignment(String, Expr),
+    Label(String),
+    Goto(String),
     If {
         cond: Expr,
         then_body: Vec<Stmt>,

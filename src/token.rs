@@ -3,6 +3,7 @@ pub enum Token {
     Auto,
     Extrn,
     Main,
+    Goto,
     Return,
     If,
     Else,
@@ -46,6 +47,7 @@ pub enum Token {
     RParen,             // ')'
     LBrace,             // '{'
     RBrace,             // '}'
+    Colon,              // ':'
     Semicolon,          // ';'
     Comma,              // ','
     Identifier(String),

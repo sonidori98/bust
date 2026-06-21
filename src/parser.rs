@@ -164,6 +164,15 @@ impl Parser {
                 self.consume(Token::Semicolon);
                 Stmt::Declaration(names)
             }
+            Token::Goto => {
+                self.consume(Token::Goto);
+                let label = match self.next_token() {
+                    Token::Identifier(n) => n,
+                    _ => panic!("Expected label name"),
+                };
+                self.consume(Token::Semicolon);
+                Stmt::Goto(label)
+            }
             Token::Identifier(name) => {
                 self.next_token();
 
@@ -222,9 +231,12 @@ impl Parser {
                     self.consume(Token::RParen);
                     self.consume(Token::Semicolon);
                     Stmt::Expr(Expr::Call { name, args })
+                } else if *self.peek_token() == Token::Colon {
+                    self.consume(Token::Colon);
+                    Stmt::Label(name)
                 } else {
                     panic!(
-                        "Expected '=', compound assignment, or '(' after identifier, but got {:?}",
+                        "Expected '=', compound assignment, '(', ':', '++', or '--' after identifier, but got {:?}",
                         self.peek_token()
                     );
                 }
@@ -1213,6 +1225,45 @@ mod tests {
     }
 
     #[test]
+    fn test_parser_goto() {
+        let stmt = body(1, "main() { auto x; goto end; }");
+        if let Stmt::Goto(label) = stmt {
+            assert_eq!(label, "end");
+        } else {
+            panic!("Expected Stmt::Goto");
+        }
+    }
+
+    #[test]
+    fn test_parser_label() {
+        let stmt = body(1, "main() { auto x; loop: return x; }");
+        if let Stmt::Label(label) = stmt {
+            assert_eq!(label, "loop");
+        } else {
+            panic!("Expected Stmt::Label");
+        }
+    }
+
+    #[test]
+    fn test_parser_goto_label_roundtrip() {
+        let input = "main() { auto x; x = 0; loop: x = x + 1; if (x < 5) goto loop; return x; }";
+        let mut lexer = Lexer::new(input);
+        let mut parser = Parser::new(lexer.tokenize());
+        let program = parser.parse_program();
+        let body = &program.functions[0].body;
+
+        assert_eq!(body.len(), 6);
+        assert!(matches!(&body[2], Stmt::Label(n) if n == "loop"));
+        assert!(matches!(&body[3], Stmt::Assignment(..)));
+        if let Stmt::If { cond: _, then_body, else_body: _ } = &body[4] {
+            assert_eq!(then_body.len(), 1);
+            assert!(matches!(&then_body[0], Stmt::Goto(n) if n == "loop"));
+        } else {
+            panic!("Expected Stmt::If at body[4]");
+        }
+    }
+
+    #[test]
     fn test_parser_unary_minus() {
         let stmt = body(1, "main() { auto x; x = -1; }");
         if let Stmt::Assignment(name, Expr::Unary { op, expr }) = stmt {
@@ -1230,7 +1281,13 @@ mod tests {
         if let Stmt::Assignment(name, Expr::Unary { op, expr }) = stmt {
             assert_eq!(name, "x");
             assert_eq!(op, Token::Minus);
-            assert!(matches!(*expr, Expr::Unary { op: Token::Minus, .. }));
+            assert!(matches!(
+                *expr,
+                Expr::Unary {
+                    op: Token::Minus,
+                    ..
+                }
+            ));
         } else {
             panic!("Expected double unary minus");
         }

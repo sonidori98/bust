@@ -65,6 +65,10 @@ impl<'a> Lexer<'a> {
                 self.iter.next();
                 Some(Token::RBrace)
             }
+            ':' => {
+                self.iter.next();
+                Some(Token::Colon)
+            }
             ';' => {
                 self.iter.next();
                 Some(Token::Semicolon)
@@ -251,6 +255,7 @@ impl<'a> Lexer<'a> {
             "return" => Token::Return,
             "auto" => Token::Auto,
             "extrn" => Token::Extrn,
+            "goto" => Token::Goto,
             "if" => Token::If,
             "else" => Token::Else,
             "while" => Token::While,
@@ -389,6 +394,24 @@ mod tests {
                 Token::Identifier("x".to_string()),
                 Token::LessEqualAssign,
                 Token::Integer(8),
+                Token::Eof
+            ],
+            lexer.tokenize()
+        );
+    }
+
+    #[test]
+    fn test_lexer_goto_label() {
+        let input = "goto foo; bar:";
+        let mut lexer = Lexer::new(input);
+
+        assert_eq!(
+            vec![
+                Token::Goto,
+                Token::Identifier("foo".to_string()),
+                Token::Semicolon,
+                Token::Identifier("bar".to_string()),
+                Token::Colon,
                 Token::Eof
             ],
             lexer.tokenize()
