@@ -35,10 +35,13 @@ pub enum Stmt {
 #[derive(Debug, Clone)]
 pub struct Function {
     pub name: String,
+    pub params: Vec<String>,
     pub body: Vec<Stmt>,
+    pub locals: std::collections::HashMap<String, i64>,
 }
 
 #[derive(Debug, Clone)]
 pub struct Program {
     pub functions: Vec<Function>,
+    pub globals: std::collections::HashMap<String, String>,
 }

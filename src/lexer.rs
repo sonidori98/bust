@@ -89,6 +89,22 @@ impl<'a> Lexer<'a> {
                 self.iter.next();
                 Some(Token::Slash)
             }
+            '&' => {
+                self.iter.next();
+                Some(Token::BitAnd)
+            }
+            '|' => {
+                self.iter.next();
+                Some(Token::BitOr)
+            }
+            // '<<' => {
+            //     self.iter.next();
+            //     Some(Token::LShift)
+            // }
+            // '>>' => {
+            //     self.iter.next();
+            //     Some(Token::RShift)
+            // }
             '=' => {
                 self.iter.next();
                 if self.iter.peek() == Some(&'=') {
@@ -112,6 +128,9 @@ impl<'a> Lexer<'a> {
                 if self.iter.peek() == Some(&'=') {
                     self.iter.next();
                     Some(Token::LessEqual)
+                } else if self.iter.peek() == Some(&'<') {
+                    self.iter.next();
+                    Some(Token::LShift)
                 } else {
                     Some(Token::LessThan)
                 }
@@ -121,6 +140,9 @@ impl<'a> Lexer<'a> {
                 if self.iter.peek() == Some(&'=') {
                     self.iter.next();
                     Some(Token::GreaterEqual)
+                } else if self.iter.peek() == Some(&'>') {
+                    self.iter.next();
+                    Some(Token::RShift)
                 } else {
                     Some(Token::GreaterThan)
                 }
@@ -155,6 +177,7 @@ impl<'a> Lexer<'a> {
             "main" => Token::Main,
             "return" => Token::Return,
             "auto" => Token::Auto,
+            "extrn" => Token::Extrn,
             "if" => Token::If,
             "else" => Token::Else,
             "while" => Token::While,

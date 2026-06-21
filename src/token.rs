@@ -1,6 +1,7 @@
 #[derive(Debug, Clone, PartialEq)]
 pub enum Token {
     Auto,
+    Extrn,
     Main,
     Return,
     If,
@@ -11,6 +12,10 @@ pub enum Token {
     Minus,        // -
     Star,         // *
     Slash,        // /
+    BitAnd,       // &
+    BitOr,        // |
+    LShift,       // <<
+    RShift,       // >>
     Assign,       // =
     Equal,        // ==
     NotEqual,     // !=

@@ -24,25 +24,42 @@ impl Codegen {
         label
     }
 
-    pub fn generate(&mut self, program: &Program, vars: &HashMap<String, i64>) -> String {
+    pub fn generate(&mut self, program: &Program) -> String {
         self.output.push_str(".intel_syntax noprefix\n");
         self.output.push_str(".global main\n\n");
 
+        for (_name, label) in &program.globals {
+            self.output.push_str(&format!(".comm {}, 8, 8\n", label));
+        }
+
         for func in &program.functions {
-            self.generate_function(func, vars);
+            self.generate_function(func, &program.globals);
         }
 
         self.output.clone()
     }
 
-    fn generate_function(&mut self, func: &Function, vars: &HashMap<String, i64>) {
+    fn generate_function(&mut self, func: &Function, globals: &HashMap<String, String>) {
         self.output.push_str(&format!("{}:\n", func.name));
 
         self.output.push_str("    push rbp\n");
         self.output.push_str("    mov rbp, rsp\n");
 
+        let stack_size = (func.locals.len() * 8 + 15) & !15;
+        if stack_size > 0 {
+            self.output.push_str(&format!("    sub rsp, {}\n", stack_size));
+        }
+
+        let arg_regs = ["rdi", "rsi", "rdx", "rcx", "r8", "r9"];
+        for (i, param_name) in func.params.iter().enumerate() {
+            if let Some(offset) = func.locals.get(param_name) {
+                self.output
+                    .push_str(&format!("    mov [rbp + {}], {}\n", offset, arg_regs[i]));
+            }
+        }
+
         for stmt in &func.body {
-            self.generate_statement(stmt, vars);
+            self.generate_statement(stmt, &func.locals, globals);
         }
 
         self.output.push_str("    mov rsp, rbp\n");
@@ -50,10 +67,15 @@ impl Codegen {
         self.output.push_str("    ret\n");
     }
 
-    fn generate_statement(&mut self, stmt: &Stmt, vars: &HashMap<String, i64>) {
+    fn generate_statement(
+        &mut self,
+        stmt: &Stmt,
+        locals: &HashMap<String, i64>,
+        globals: &HashMap<String, String>,
+    ) {
         match stmt {
             Stmt::Return(expr) => {
-                self.generate_expression(expr, vars);
+                self.generate_expression(expr, locals, globals);
 
                 self.output.push_str("    pop rax\n");
                 self.output.push_str("    mov rsp, rbp\n");
@@ -61,13 +83,19 @@ impl Codegen {
                 self.output.push_str("    ret\n");
             }
             Stmt::Assignment(name, expr) => {
-                self.generate_expression(expr, vars);
+                self.generate_expression(expr, locals, globals);
 
                 self.output.push_str("    pop rax\n");
 
-                let offset = vars.get(name).unwrap();
-                self.output
-                    .push_str(&format!("    mov [rbp + {}], rax\n", offset));
+                if let Some(offset) = locals.get(name) {
+                    self.output
+                        .push_str(&format!("    mov [rbp + {}], rax\n", offset));
+                } else if let Some(label) = globals.get(name) {
+                    self.output
+                        .push_str(&format!("    mov [rip + {}], rax\n", label));
+                } else {
+                    panic!("Undefined variable: {}", name);
+                }
             }
             Stmt::Declaration(_names) => {}
             Stmt::If {
@@ -77,26 +105,26 @@ impl Codegen {
             } => {
                 let id = self.new_label();
 
-                self.generate_expression(cond, vars);
+                self.generate_expression(cond, locals, globals);
                 self.output.push_str("    pop rax\n");
                 self.output.push_str("    cmp rax, 0\n");
 
                 if let Some(else_stmts) = else_body {
                     self.output.push_str(&format!("    je .L_ELSE_{}\n", id));
                     for stmt in then_body {
-                        self.generate_statement(&stmt, vars);
+                        self.generate_statement(&stmt, locals, globals);
                     }
                     self.output.push_str(&format!("    jmp .L_END_{}\n", id));
 
                     self.output.push_str(&format!(".L_ELSE_{}:\n", id));
                     for stmt in else_stmts {
-                        self.generate_statement(&stmt, vars);
+                        self.generate_statement(&stmt, locals, globals);
                     }
                     self.output.push_str(&format!(".L_END_{}:\n", id));
                 } else {
                     self.output.push_str(&format!("    je .L_END_{}\n", id));
                     for stmt in then_body {
-                        self.generate_statement(&stmt, vars);
+                        self.generate_statement(&stmt, locals, globals);
                     }
                     self.output.push_str(&format!(".L_END_{}:\n", id));
                 }
@@ -106,7 +134,7 @@ impl Codegen {
 
                 self.output.push_str(&format!(".L_WHILE_START_{}:\n", id));
 
-                self.generate_expression(cond, vars);
+                self.generate_expression(cond, locals, globals);
                 self.output.push_str("    pop rax\n");
                 self.output.push_str("    cmp rax, 0\n");
 
@@ -114,7 +142,7 @@ impl Codegen {
                     .push_str(&format!("    je .L_WHILE_END_{}\n", id));
 
                 for stmt in body {
-                    self.generate_statement(&stmt, vars);
+                    self.generate_statement(&stmt, locals, globals);
                 }
 
                 self.output
@@ -122,27 +150,38 @@ impl Codegen {
                 self.output.push_str(&format!(".L_WHILE_END_{}:\n", id));
             }
             Stmt::Expr(expr) => {
-                self.generate_expression(expr, vars);
+                self.generate_expression(expr, locals, globals);
                 self.output.push_str("    pop rax\n");
             }
         }
     }
 
-    fn generate_expression(&mut self, expr: &Expr, vars: &HashMap<String, i64>) {
+    fn generate_expression(
+        &mut self,
+        expr: &Expr,
+        locals: &HashMap<String, i64>,
+        globals: &HashMap<String, String>,
+    ) {
         match expr {
             Expr::Integer(val) => {
                 self.output.push_str(&format!("    mov rax, {}\n", val));
                 self.output.push_str("    push rax\n");
             }
             Expr::Identifier(name) => {
-                let offset = vars.get(name).unwrap();
-                self.output
-                    .push_str(&format!("    mov rax, [rbp + {}]\n", offset));
+                if let Some(offset) = locals.get(name) {
+                    self.output
+                        .push_str(&format!("    mov rax, [rbp + {}]\n", offset));
+                } else if let Some(label) = globals.get(name) {
+                    self.output
+                        .push_str(&format!("    mov rax, [rip + {}]\n", label));
+                } else {
+                    panic!("Undefined variable: {}", name);
+                }
                 self.output.push_str("    push rax\n");
             }
             Expr::Binary { op, left, right } => {
-                self.generate_expression(left, vars);
-                self.generate_expression(right, vars);
+                self.generate_expression(left, locals, globals);
+                self.generate_expression(right, locals, globals);
 
                 self.output.push_str("    pop rdi\n");
                 self.output.push_str("    pop rax\n");
@@ -191,13 +230,27 @@ impl Codegen {
                         self.output.push_str("    setge al\n");
                         self.output.push_str("    movzx rax, al\n");
                     }
+                    Token::BitAnd => {
+                        self.output.push_str("    and rax, rdi\n");
+                    }
+                    Token::BitOr => {
+                        self.output.push_str("    or rax, rdi\n");
+                    }
+                    Token::LShift => {
+                        self.output.push_str("    mov rcx, rdi\n");
+                        self.output.push_str("    shl rax, cl\n");
+                    }
+                    Token::RShift => {
+                        self.output.push_str("    mov rcx, rdi\n");
+                        self.output.push_str("    sar rax, cl\n");
+                    }
                     _ => panic!("Unsupported operator: {:?}", op),
                 }
                 self.output.push_str("    push rax\n");
             }
             Expr::Call { name, args } => {
                 for arg in args {
-                    self.generate_expression(arg, vars);
+                    self.generate_expression(arg, locals, globals);
                 }
                 let arg_regs = ["rdi", "rsi", "rdx", "rcx", "r8", "r9"];
 
@@ -230,7 +283,7 @@ mod tests {
         let cr = parser.parse_program();
 
         let mut codegen = Codegen::new();
-        let code = codegen.generate(&cr.program, &cr.vars);
+        let code = codegen.generate(&cr);
 
         assert_eq!(
             r#".intel_syntax noprefix
@@ -264,7 +317,7 @@ main:
         let cr = parser.parse_program();
 
         let mut codegen = Codegen::new();
-        let code = codegen.generate(&cr.program, &cr.vars);
+        let code = codegen.generate(&cr);
 
         assert!(code.contains("mov rax, 1"));
         assert!(code.contains("push rax"));
@@ -286,7 +339,7 @@ main:
         let cr = parser.parse_program();
 
         let mut codegen = Codegen::new();
-        let code = codegen.generate(&cr.program, &cr.vars);
+        let code = codegen.generate(&cr);
 
         assert!(code.contains("mov rax, 1"));
         assert!(code.contains("mov rax, 2"));
@@ -306,7 +359,7 @@ main:
         let cr = parser.parse_program();
 
         let mut codegen = Codegen::new();
-        let code = codegen.generate(&cr.program, &cr.vars);
+        let code = codegen.generate(&cr);
 
         assert!(code.contains("mov rax, 42"));
         assert!(code.contains("mov [rbp + -16], rax"));
@@ -319,7 +372,7 @@ main:
         let mut lexer = Lexer::new(input);
         let mut parser = Parser::new(lexer.tokenize());
         let cr = parser.parse_program();
-        let code = Codegen::new().generate(&cr.program, &cr.vars);
+        let code = Codegen::new().generate(&cr);
 
         assert!(code.contains("sub rax, rdi"));
         assert!(code.contains("idiv rdi"));
@@ -331,7 +384,7 @@ main:
         let mut lexer = Lexer::new(input);
         let mut parser = Parser::new(lexer.tokenize());
         let cr = parser.parse_program();
-        let code = Codegen::new().generate(&cr.program, &cr.vars);
+        let code = Codegen::new().generate(&cr);
 
         assert!(code.contains("cmp rax, rdi"));
         assert!(code.contains("sete al"));
@@ -344,7 +397,7 @@ main:
         let mut lexer = Lexer::new(input);
         let mut parser = Parser::new(lexer.tokenize());
         let cr = parser.parse_program();
-        let code = Codegen::new().generate(&cr.program, &cr.vars);
+        let code = Codegen::new().generate(&cr);
 
         assert!(code.contains("cmp rax, 0"));
         assert!(code.contains("je .L_END_0"));
@@ -359,7 +412,7 @@ main:
         let mut lexer = Lexer::new(input);
         let mut parser = Parser::new(lexer.tokenize());
         let cr = parser.parse_program();
-        let code = Codegen::new().generate(&cr.program, &cr.vars);
+        let code = Codegen::new().generate(&cr);
 
         assert!(code.contains("imul rax, rdi"));
         assert!(code.contains("add rax, rdi"));
@@ -373,7 +426,7 @@ main:
         let mut lexer = Lexer::new(input);
         let mut parser = Parser::new(lexer.tokenize());
         let cr = parser.parse_program();
-        let code = Codegen::new().generate(&cr.program, &cr.vars);
+        let code = Codegen::new().generate(&cr);
 
         assert!(code.contains(".L_WHILE_START_0:"));
         assert!(code.contains("je .L_WHILE_END_0"));
@@ -387,7 +440,7 @@ main:
         let mut lexer = Lexer::new(input);
         let mut parser = Parser::new(lexer.tokenize());
         let cr = parser.parse_program();
-        let code = Codegen::new().generate(&cr.program, &cr.vars);
+        let code = Codegen::new().generate(&cr);
 
         assert!(code.contains("mov rax, 1"));
         assert!(code.contains("mov rax, 2"));
@@ -395,5 +448,128 @@ main:
         assert!(code.contains("pop rdi"));
         assert!(code.contains("call foo"));
         assert!(code.contains("push rax"));
+    }
+
+    #[test]
+    fn test_codegen_global_shadowing() {
+        let input = "extrn x; main() { auto x; x = 42; return x; }";
+        let mut lexer = Lexer::new(input);
+        let mut parser = Parser::new(lexer.tokenize());
+        let cr = parser.parse_program();
+        let code = Codegen::new().generate(&cr);
+
+        assert!(code.contains("mov [rbp + -16], rax"));
+        assert!(!code.contains("mov [rip + .x], rax"));
+    }
+
+    #[test]
+    fn test_codegen_multiple_functions_global() {
+        let input = "extrn g; set_g(v) { g = v; } get_g() { return g; }";
+        let mut lexer = Lexer::new(input);
+        let mut parser = Parser::new(lexer.tokenize());
+        let cr = parser.parse_program();
+        let code = Codegen::new().generate(&cr);
+
+        assert!(code.contains(".comm .g, 8, 8"));
+        assert!(code.contains("set_g:"));
+        assert!(code.contains("mov [rip + .g], rax"));
+        assert!(code.contains("get_g:"));
+        assert!(code.contains("mov rax, [rip + .g]"));
+    }
+
+    #[test]
+    fn test_codegen_inter_function_calls() {
+        let input = "
+            extrn total;
+            add_to_total(n) {
+                total = total + n;
+                return total;
+            }
+            main() {
+                auto res;
+                res = add_to_total(10);
+                res = add_to_total(20);
+                return res;
+            }
+        ";
+        let mut lexer = Lexer::new(input);
+        let mut parser = Parser::new(lexer.tokenize());
+        let cr = parser.parse_program();
+        let code = Codegen::new().generate(&cr);
+
+        assert!(code.contains(".comm .total, 8, 8"));
+        assert!(code.contains("add_to_total:"));
+        assert!(code.contains("call add_to_total"));
+        assert!(code.contains("mov rax, [rip + .total]"));
+        assert!(code.contains("mov [rip + .total], rax"));
+    }
+
+    #[test]
+    fn test_codegen_nested_calls() {
+        let input = "
+            square(n) { return n * n; }
+            sum_squares(a, b) {
+                return square(a) + square(b);
+            }
+            main() {
+                return sum_squares(3, 4);
+            }
+        ";
+        let mut lexer = Lexer::new(input);
+        let mut parser = Parser::new(lexer.tokenize());
+        let cr = parser.parse_program();
+        let code = Codegen::new().generate(&cr);
+
+        assert!(code.contains("square:"));
+        assert!(code.contains("sum_squares:"));
+        assert!(code.contains("call sum_squares"));
+        assert!(code.contains("call square"));
+        assert!(code.contains("imul rax, rdi"));
+    }
+
+    #[test]
+    fn test_codegen_bitwise_and() {
+        let input = "main() { return 12 & 10; }";
+        let mut lexer = Lexer::new(input);
+        let mut parser = Parser::new(lexer.tokenize());
+        let cr = parser.parse_program();
+        let code = Codegen::new().generate(&cr);
+
+        assert!(code.contains("and rax, rdi"));
+    }
+
+    #[test]
+    fn test_codegen_bitwise_or() {
+        let input = "main() { return 12 | 10; }";
+        let mut lexer = Lexer::new(input);
+        let mut parser = Parser::new(lexer.tokenize());
+        let cr = parser.parse_program();
+        let code = Codegen::new().generate(&cr);
+
+        assert!(code.contains("or rax, rdi"));
+    }
+
+    #[test]
+    fn test_codegen_lshift() {
+        let input = "main() { return 1 << 3; }";
+        let mut lexer = Lexer::new(input);
+        let mut parser = Parser::new(lexer.tokenize());
+        let cr = parser.parse_program();
+        let code = Codegen::new().generate(&cr);
+
+        assert!(code.contains("mov rcx, rdi"));
+        assert!(code.contains("shl rax, cl"));
+    }
+
+    #[test]
+    fn test_codegen_rshift() {
+        let input = "main() { return 8 >> 2; }";
+        let mut lexer = Lexer::new(input);
+        let mut parser = Parser::new(lexer.tokenize());
+        let cr = parser.parse_program();
+        let code = Codegen::new().generate(&cr);
+
+        assert!(code.contains("mov rcx, rdi"));
+        assert!(code.contains("sar rax, cl"));
     }
 }

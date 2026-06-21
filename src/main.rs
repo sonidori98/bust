@@ -41,8 +41,8 @@ fn main() {
     let tokens = lexer.tokenize();
     let mut parser = Parser::new(tokens);
     let mut codegen = Codegen::new();
-    let compiler_result = parser.parse_program();
-    let code = codegen.generate(&compiler_result.program, &compiler_result.vars);
+    let program = parser.parse_program();
+    let code = codegen.generate(&program);
 
     if args.assembly {
         if args.output == "a.out" {

@@ -7,14 +7,10 @@ use crate::{
     token::Token,
 };
 
-pub struct CompilationResult {
-    pub program: Program,
-    pub vars: HashMap<String, i64>,
-}
-
 pub struct Parser {
     iter: Peekable<IntoIter<Token>>,
     vars: HashMap<String, i64>,
+    global_vars: HashMap<String, String>,
     next_offset: i64,
 }
 
@@ -23,6 +19,7 @@ impl Parser {
         Self {
             iter: tokens.into_iter().peekable(),
             vars: HashMap::new(),
+            global_vars: HashMap::new(),
             next_offset: -8,
         }
     }
@@ -42,32 +39,73 @@ impl Parser {
         }
     }
 
-    pub fn parse_program(&mut self) -> CompilationResult {
-        let mut functions = Vec::new();
-        while *self.peek_token() != Token::Eof {
-            functions.push(self.parse_function());
+    fn register_global(&mut self) {
+        loop {
+            if let Token::Identifier(name) = self.next_token() {
+                let label = format!(".{}", name);
+                self.global_vars.insert(name, label);
+
+                if *self.peek_token() == Token::Comma {
+                    self.consume(Token::Comma);
+                } else {
+                    break;
+                }
+            }
         }
-        let program = Program { functions };
-        let vars = std::mem::take(&mut self.vars);
-        CompilationResult { program, vars }
+        self.consume(Token::Semicolon);
     }
 
-    // "main" "(" ")" "{" ... "}"
-    fn parse_function(&mut self) -> Function {
-        self.consume(Token::Main);
-        self.consume(Token::LParen);
-        self.consume(Token::RParen);
-        self.consume(Token::LBrace);
+    pub fn parse_program(&mut self) -> Program {
+        let mut functions = Vec::new();
+        while *self.peek_token() != Token::Eof {
+            match self.peek_token() {
+                Token::Extrn => {
+                    self.consume(Token::Extrn);
+                    self.register_global();
+                }
+                _ => {
+                    functions.push(self.parse_function());
+                }
+            }
+        }
+        let globals = std::mem::take(&mut self.global_vars);
+        Program { functions, globals }
+    }
 
+    // "func" "(" "arg" ")" "{" ... "}"
+    fn parse_function(&mut self) -> Function {
+        self.vars.clear();
+        self.next_offset = -8;
+        
+        let name = match self.next_token() {
+            Token::Main => "main".to_string(),
+            Token::Identifier(n) => n,
+            _ => panic!("Expected function name"),
+        };
+
+        self.consume(Token::LParen);
+        let mut params = Vec::new();
+        while *self.peek_token() != Token::RParen {
+            if let Token::Identifier(p) = self.next_token() {
+                self.vars.insert(p.clone(), self.next_offset);
+                self.next_offset -= 8;
+                params.push(p);
+            }
+            if *self.peek_token() == Token::Comma {
+                self.consume(Token::Comma);
+            }
+        }
+        self.consume(Token::RParen);
+
+        self.consume(Token::LBrace);
         let mut body = Vec::new();
         while *self.peek_token() != Token::RBrace {
             body.push(self.parse_statement());
         }
         self.consume(Token::RBrace);
-        Function {
-            name: "main".to_string(),
-            body,
-        }
+
+        let locals = std::mem::take(&mut self.vars);
+        Function { name, params, body, locals }
     }
 
     // "return" <expr> ";"
@@ -192,7 +230,27 @@ impl Parser {
     }
 
     fn parse_expression(&mut self) -> Expr {
-        self.parse_equality()
+        self.parse_bit_or()
+    }
+
+    fn parse_bit_or(&mut self) -> Expr {
+        let mut left = self.parse_bit_and();
+        while *self.peek_token() == Token::BitOr {
+            let op = self.next_token();
+            let right = self.parse_bit_and();
+            left = Expr::Binary { op, left: Box::new(left), right: Box::new(right) }
+        }
+        left
+    }
+
+    fn parse_bit_and(&mut self) -> Expr {
+        let mut left = self.parse_equality();
+        while *self.peek_token() == Token::BitAnd {
+            let op = self.next_token();
+            let right = self.parse_equality();
+            left = Expr::Binary { op , left: Box::new(left), right: Box::new(right) }
+        }
+        left
     }
 
     fn parse_equality(&mut self) -> Expr {
@@ -211,19 +269,29 @@ impl Parser {
     }
 
     fn parse_relational(&mut self) -> Expr {
-        let mut left = self.parse_add_sub();
+        let mut left = self.parse_shift();
 
         while matches!(
             *self.peek_token(),
             Token::LessThan | Token::LessEqual | Token::GreaterThan | Token::GreaterEqual
         ) {
             let op = self.next_token();
-            let right = self.parse_add_sub();
+            let right = self.parse_shift();
             left = Expr::Binary {
                 op,
                 left: Box::new(left),
                 right: Box::new(right),
             }
+        }
+        left
+    }
+
+    fn parse_shift(&mut self) -> Expr {
+        let mut left = self.parse_add_sub();
+        while matches!(*self.peek_token(), Token::LShift | Token::RShift) {
+            let op = self.next_token();
+            let right = self.parse_add_sub();
+            left = Expr::Binary { op, left: Box::new(left), right: Box::new(right) }
         }
         left
     }
@@ -284,7 +352,7 @@ impl Parser {
                     self.consume(Token::RParen);
                     Expr::Call { name, args }
                 } else {
-                    if !self.vars.contains_key(&name) {
+                    if !self.vars.contains_key(&name) && !self.global_vars.contains_key(&name) {
                         panic!("Undefined variable: {}", name);
                     }
                     Expr::Identifier(name)
@@ -327,7 +395,7 @@ mod tests {
         let mut parser = Parser::new(tokens);
         let cr = parser.parse_program();
 
-        let func = &cr.program.functions[0];
+        let func = &cr.functions[0];
         assert_eq!(func.body.len(), 4);
 
         if let Stmt::Declaration(names) = &func.body[0] {
@@ -389,9 +457,9 @@ mod tests {
         let mut parser = Parser::new(tokens);
         let cr = parser.parse_program();
 
-        assert_eq!(cr.program.functions.len(), 1);
+        assert_eq!(cr.functions.len(), 1);
 
-        let func = &cr.program.functions[0];
+        let func = &cr.functions[0];
         assert_eq!(func.name, "main");
         assert_eq!(func.body.len(), 1);
 
@@ -417,7 +485,7 @@ mod tests {
         let mut parser = Parser::new(tokens);
         let cr = parser.parse_program();
 
-        let func = &cr.program.functions[0];
+        let func = &cr.functions[0];
         if let Stmt::Return(expr) = &func.body[0] {
             match expr {
                 Expr::Binary { op, left, right } => {
@@ -458,7 +526,7 @@ mod tests {
         let mut parser = Parser::new(tokens);
         let cr = parser.parse_program();
 
-        let func = &cr.program.functions[0];
+        let func = &cr.functions[0];
         assert_eq!(func.body.len(), 2);
 
         if let Stmt::If {
@@ -489,7 +557,7 @@ mod tests {
         let mut parser = Parser::new(tokens);
         let cr = parser.parse_program();
 
-        let func = &cr.program.functions[0];
+        let func = &cr.functions[0];
         if let Stmt::Return(expr) = &func.body[0] {
             if let Expr::Binary { op, .. } = expr {
                 assert!(matches!(op, Token::Equal | Token::NotEqual));
@@ -511,7 +579,7 @@ mod tests {
         let mut parser = Parser::new(tokens);
         let cr = parser.parse_program();
 
-        let func = &cr.program.functions[0];
+        let func = &cr.functions[0];
         if let Stmt::Return(expr) = &func.body[0] {
             match expr {
                 Expr::Binary { op, left, right } => {
@@ -552,7 +620,7 @@ mod tests {
         let mut parser = Parser::new(tokens);
         let cr = parser.parse_program();
 
-        let func = &cr.program.functions[0];
+        let func = &cr.functions[0];
         assert_eq!(func.body.len(), 2);
 
         if let Stmt::If {
@@ -583,7 +651,7 @@ mod tests {
         let mut parser = Parser::new(tokens);
         let cr = parser.parse_program();
 
-        let func = &cr.program.functions[0];
+        let func = &cr.functions[0];
         assert_eq!(func.body.len(), 1);
 
         if let Stmt::If {
@@ -610,7 +678,7 @@ mod tests {
         let mut parser = Parser::new(tokens);
         let cr = parser.parse_program();
 
-        let func = &cr.program.functions[0];
+        let func = &cr.functions[0];
         if let Stmt::While { cond: _, body } = &func.body[0] {
             assert_eq!(body.len(), 1);
         } else {
@@ -628,7 +696,7 @@ mod tests {
         let mut parser = Parser::new(tokens);
         let cr = parser.parse_program();
 
-        let func = &cr.program.functions[0];
+        let func = &cr.functions[0];
         if let Stmt::While { cond: _, body } = &func.body[0] {
             assert_eq!(body.len(), 1);
         } else {
@@ -637,25 +705,36 @@ mod tests {
     }
 
     #[test]
-    fn test_parser_call() {
-        let input = "main() { return foo(1, 2 + 3); }";
-
+    fn test_parser_global_variables() {
+        let input = "extrn a, b; extrn c; main() { return a + b + c; }";
         let mut lexer = Lexer::new(input);
         let tokens = lexer.tokenize();
 
         let mut parser = Parser::new(tokens);
-        let cr = parser.parse_program();
+        let program = parser.parse_program();
 
-        let func = &cr.program.functions[0];
-        if let Stmt::Return(expr) = &func.body[0] {
-            if let Expr::Call { name, args } = expr {
-                assert_eq!(name, "foo");
-                assert_eq!(args.len(), 2);
-            } else {
-                panic!("Expected Expr::Call");
-            }
+        assert_eq!(program.globals.len(), 3);
+        assert!(program.globals.contains_key("a"));
+        assert!(program.globals.contains_key("b"));
+        assert!(program.globals.contains_key("c"));
+
+        let func = &program.functions[0];
+        assert_eq!(func.name, "main");
+        if let Stmt::Return(Expr::Binary { .. }) = &func.body[0] {
         } else {
-            panic!("Expected Stmt::Return");
+            panic!("Expected return with binary expression");
         }
+    }
+
+    #[test]
+    fn test_parser_global_local_mix() {
+        let input = "extrn x; main() { auto x; x = 1; return x; }";
+        let mut lexer = Lexer::new(input);
+        let mut parser = Parser::new(lexer.tokenize());
+        let program = parser.parse_program();
+
+        let func = &program.functions[0];
+        assert!(func.locals.contains_key("x"));
+        assert!(program.globals.contains_key("x"));
     }
 }
