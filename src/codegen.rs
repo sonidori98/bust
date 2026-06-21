@@ -161,6 +161,19 @@ impl Codegen {
                     .push_str(&format!("    jmp .L_WHILE_START_{}\n", id));
                 self.output.push_str(&format!(".L_WHILE_END_{}:\n", id));
             }
+            Stmt::Switch { id: _, cond, cases, body } => {
+                self.generate_expression(cond, locals, globals);
+                self.output.push_str("    pop rax\n");
+
+                for (val, label_name) in cases {
+                    self.output.push_str(&format!("    cmp rax, {}\n", val));
+                    self.output.push_str(&format!("    je .L{}_{}\n", self.current_func_name, label_name));
+                }
+
+                for stmt in body {
+                    self.generate_statement(stmt, locals, globals);
+                }
+            }
             Stmt::Expr(expr) => {
                 self.generate_expression(expr, locals, globals);
                 self.output.push_str("    pop rax\n");
@@ -732,6 +745,42 @@ main:
         assert!(count_add >= 1);
         assert!(count_sub >= 1);
         assert!(code.contains("mov [rip + .x], rax"));
+    }
+
+    #[test]
+    fn test_codegen_switch() {
+        let input = "main() { auto x; switch(x) { case 1: return 1; case 2: return 2; } }";
+        let mut lexer = Lexer::new(input);
+        let mut parser = Parser::new(lexer.tokenize());
+        let cr = parser.parse_program();
+        let code = Codegen::new().generate(&cr);
+
+        assert!(code.contains("cmp rax, 1"));
+        assert!(code.contains("cmp rax, 2"));
+        assert!(code.contains("je .Lmain_sw_1_case_1"));
+        assert!(code.contains("je .Lmain_sw_1_case_2"));
+        assert!(code.contains(".Lmain_sw_1_case_1:"));
+        assert!(code.contains(".Lmain_sw_1_case_2:"));
+    }
+
+    #[test]
+    fn test_codegen_switch_fallthrough() {
+        let input = "main() { auto x; switch(x) { case 0: case 1: return 1; } }";
+        let mut lexer = Lexer::new(input);
+        let mut parser = Parser::new(lexer.tokenize());
+        let cr = parser.parse_program();
+        let code = Codegen::new().generate(&cr);
+
+        assert!(code.contains("cmp rax, 0"));
+        assert!(code.contains("cmp rax, 1"));
+        assert!(code.contains(".Lmain_sw_1_case_0:"));
+        assert!(code.contains(".Lmain_sw_1_case_1:"));
+        // case 0 falls through to case 1 (both labels before `return 1`)
+        let label0_pos = code.find(".Lmain_sw_1_case_0:").unwrap();
+        let label1_pos = code.find(".Lmain_sw_1_case_1:").unwrap();
+        let ret_pos = code.find("mov rax, 1").unwrap();
+        assert!(label0_pos < label1_pos);
+        assert!(label1_pos < ret_pos);
     }
 
     #[test]

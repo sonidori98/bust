@@ -43,6 +43,12 @@ pub enum Stmt {
         cond: Expr,
         body: Vec<Stmt>,
     },
+    Switch {
+        id: usize,
+        cond: Expr,
+        cases: Vec<(i64, String)>,
+        body: Vec<Stmt>,
+    },
     Expr(Expr),
 }
 

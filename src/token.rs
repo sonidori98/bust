@@ -8,6 +8,8 @@ pub enum Token {
     If,
     Else,
     While,
+    Switch,
+    Case,
     Integer(i64),
     Plus,               // +
     Minus,              // -

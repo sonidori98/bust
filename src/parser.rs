@@ -11,6 +11,7 @@ pub struct Parser {
     iter: Peekable<IntoIter<Token>>,
     vars: HashMap<String, i64>,
     global_vars: HashMap<String, String>,
+    switch_count: usize,
     next_offset: i64,
 }
 
@@ -20,6 +21,7 @@ impl Parser {
             iter: tokens.into_iter().peekable(),
             vars: HashMap::new(),
             global_vars: HashMap::new(),
+            switch_count: 0,
             next_offset: -8,
         }
     }
@@ -37,6 +39,11 @@ impl Parser {
         if actual != expected {
             panic!("Expected {:?}, but got {:?}", expected, actual);
         }
+    }
+
+    fn next_switch_id(&mut self) -> usize {
+        self.switch_count += 1;
+        self.switch_count
     }
 
     fn compound_op_to_binary(&self, token: Token) -> Option<Token> {
@@ -183,8 +190,7 @@ impl Parser {
                         Stmt::Assignment(name, expr)
                     }
                     Token::Increment => {
-                        if !self.vars.contains_key(&name) && !self.global_vars.contains_key(&name)
-                        {
+                        if !self.vars.contains_key(&name) && !self.global_vars.contains_key(&name) {
                             panic!("Undefined variable: {}", name);
                         }
                         self.next_token();
@@ -195,8 +201,7 @@ impl Parser {
                         })
                     }
                     Token::Decrement => {
-                        if !self.vars.contains_key(&name) && !self.global_vars.contains_key(&name)
-                        {
+                        if !self.vars.contains_key(&name) && !self.global_vars.contains_key(&name) {
                             panic!("Undefined variable: {}", name);
                         }
                         self.next_token();
@@ -333,6 +338,37 @@ impl Parser {
                 }
 
                 Stmt::While { cond, body }
+            }
+            Token::Switch => {
+                self.consume(Token::Switch);
+                self.consume(Token::LParen);
+                let cond = self.parse_expression();
+                self.consume(Token::RParen);
+
+                let id = self.next_switch_id();
+                let mut cases = Vec::new();
+                let mut body = Vec::new();
+
+                self.consume(Token::LBrace);
+                while *self.peek_token() != Token::RBrace {
+                    if *self.peek_token() == Token::Case {
+                        self.consume(Token::Case);
+                        let val = match self.next_token() {
+                            Token::Integer(v) => v,
+                            _ => panic!("Expected integer value after case keyword"),
+                        };
+                        self.consume(Token::Colon);
+
+                        let label_name = format!("sw_{}_case_{}", id, val);
+                        cases.push((val, label_name.clone()));
+                        body.push(Stmt::Label(label_name));
+                    } else {
+                        body.push(self.parse_statement());
+                    }
+                }
+                self.consume(Token::RBrace);
+
+                Stmt::Switch { id, cond, cases, body }
             }
             _ => panic!("Unsupported statement: {:?}", token),
         }
@@ -1232,6 +1268,43 @@ mod tests {
     }
 
     #[test]
+    fn test_parser_switch() {
+        let input = "main() { auto x; switch(x) { case 1: return 1; case 2: return 2; } }";
+        let mut lexer = Lexer::new(input);
+        let mut parser = Parser::new(lexer.tokenize());
+        let program = parser.parse_program();
+        let body = &program.functions[0].body;
+
+        assert_eq!(body.len(), 2);
+        assert!(matches!(&body[1], Stmt::Switch { .. }));
+        if let Stmt::Switch { id: _, cond: _, cases, body: switch_body } = &body[1] {
+            assert_eq!(cases.len(), 2);
+            assert_eq!(cases[0], (1, format!("sw_1_case_1")));
+            assert_eq!(cases[1], (2, format!("sw_1_case_2")));
+            assert_eq!(switch_body.len(), 4);
+            assert!(matches!(&switch_body[0], Stmt::Label(n) if n == "sw_1_case_1"));
+            assert!(matches!(&switch_body[2], Stmt::Label(n) if n == "sw_1_case_2"));
+        }
+    }
+
+    #[test]
+    fn test_parser_switch_second_id() {
+        let input = "main() { switch(0) { case 0: } switch(1) { case 1: } }";
+        let mut lexer = Lexer::new(input);
+        let mut parser = Parser::new(lexer.tokenize());
+        let program = parser.parse_program();
+        let body = &program.functions[0].body;
+
+        assert_eq!(body.len(), 2);
+        if let Stmt::Switch { cases, .. } = &body[0] {
+            assert_eq!(cases[0].1, "sw_1_case_0");
+        }
+        if let Stmt::Switch { cases, .. } = &body[1] {
+            assert_eq!(cases[0].1, "sw_2_case_1");
+        }
+    }
+
+    #[test]
     fn test_parser_goto() {
         let stmt = body(1, "main() { auto x; goto end; }");
         if let Stmt::Goto(label) = stmt {
@@ -1262,7 +1335,12 @@ mod tests {
         assert_eq!(body.len(), 6);
         assert!(matches!(&body[2], Stmt::Label(n) if n == "loop"));
         assert!(matches!(&body[3], Stmt::Assignment(..)));
-        if let Stmt::If { cond: _, then_body, else_body: _ } = &body[4] {
+        if let Stmt::If {
+            cond: _,
+            then_body,
+            else_body: _,
+        } = &body[4]
+        {
             assert_eq!(then_body.len(), 1);
             assert!(matches!(&then_body[0], Stmt::Goto(n) if n == "loop"));
         } else {

@@ -259,6 +259,8 @@ impl<'a> Lexer<'a> {
             "if" => Token::If,
             "else" => Token::Else,
             "while" => Token::While,
+            "switch" => Token::Switch,
+            "case" => Token::Case,
             _ => Token::Identifier(word),
         }
     }
@@ -394,6 +396,31 @@ mod tests {
                 Token::Identifier("x".to_string()),
                 Token::LessEqualAssign,
                 Token::Integer(8),
+                Token::Eof
+            ],
+            lexer.tokenize()
+        );
+    }
+
+    #[test]
+    fn test_lexer_switch_case() {
+        let input = "switch(x) { case 1: case 2: }";
+        let mut lexer = Lexer::new(input);
+
+        assert_eq!(
+            vec![
+                Token::Switch,
+                Token::LParen,
+                Token::Identifier("x".to_string()),
+                Token::RParen,
+                Token::LBrace,
+                Token::Case,
+                Token::Integer(1),
+                Token::Colon,
+                Token::Case,
+                Token::Integer(2),
+                Token::Colon,
+                Token::RBrace,
                 Token::Eof
             ],
             lexer.tokenize()
