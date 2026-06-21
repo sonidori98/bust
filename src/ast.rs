@@ -13,6 +13,10 @@ pub enum Expr {
         name: String,
         args: Vec<Expr>,
     },
+    Unary {
+        op: Token,
+        expr: Box<Expr>,
+    },
 }
 
 #[derive(Debug, Clone)]

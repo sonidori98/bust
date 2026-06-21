@@ -8,27 +8,44 @@ pub enum Token {
     Else,
     While,
     Integer(i64),
-    Plus,         // +
-    Minus,        // -
-    Star,         // *
-    Slash,        // /
-    BitAnd,       // &
-    BitOr,        // |
-    LShift,       // <<
-    RShift,       // >>
-    Assign,       // =
-    Equal,        // ==
-    NotEqual,     // !=
-    LessThan,     // <
-    LessEqual,    // <=
-    GreaterThan,  // >
-    GreaterEqual, // >=
-    LParen,       // '('
-    RParen,       // ')'
-    LBrace,       // '{'
-    RBrace,       // '}'
-    Semicolon,    // ';'
-    Comma,        // ','
+    Plus,               // +
+    Minus,              // -
+    Star,               // *
+    Slash,              // /
+    Percent,            // %
+    BitAnd,             // &
+    BitOr,              // |
+    LShift,             // <<
+    RShift,             // >>
+    Assign,             // =
+    Equal,              // ==
+    NotEqual,           // !=
+    LessThan,           // <
+    LessEqual,          // <=
+    GreaterThan,        // >
+    GreaterEqual,       // >=
+    PlusAssign,         // =+
+    MinusAssign,        // =-
+    MulAssign,          // =*
+    ModAssign,          // =%
+    DivAssign,          // =/
+    BitAndAssign,       // =&
+    BitOrAssign,        // =|
+    LShiftAssign,       // =<<
+    RShiftAssign,       // =>>
+    GreaterAssign,      // =>
+    LessAssign,         // =<
+    EqualAssign,        // ===
+    NotEqualAssign,     // =!=
+    GreaterEqualAssign, // =>=
+    LessEqualAssign,    // =<=
+    Not,                // !
+    LParen,             // '('
+    RParen,             // ')'
+    LBrace,             // '{'
+    RBrace,             // '}'
+    Semicolon,          // ';'
+    Comma,              // ','
     Identifier(String),
     Eof, // End of file
 }

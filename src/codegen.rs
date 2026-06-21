@@ -47,7 +47,8 @@ impl Codegen {
 
         let stack_size = (func.locals.len() * 8 + 15) & !15;
         if stack_size > 0 {
-            self.output.push_str(&format!("    sub rsp, {}\n", stack_size));
+            self.output
+                .push_str(&format!("    sub rsp, {}\n", stack_size));
         }
 
         let arg_regs = ["rdi", "rsi", "rdx", "rcx", "r8", "r9"];
@@ -200,6 +201,11 @@ impl Codegen {
                         self.output.push_str("    cqo\n");
                         self.output.push_str("    idiv rdi\n");
                     }
+                    Token::Percent => {
+                        self.output.push_str("    cqo\n");
+                        self.output.push_str("    idiv rdi\n");
+                        self.output.push_str("    mov rax, rdx\n");
+                    }
                     Token::Equal => {
                         self.output.push_str("    cmp rax, rdi\n");
                         self.output.push_str("    sete al\n");
@@ -248,6 +254,17 @@ impl Codegen {
                 }
                 self.output.push_str("    push rax\n");
             }
+            Expr::Unary { op, expr } => match op {
+                Token::Not => {
+                    self.generate_expression(expr, locals, globals);
+                    self.output.push_str("    pop rax\n");
+                    self.output.push_str("    cmp rax, 0\n");
+                    self.output.push_str("    sete al\n");
+                    self.output.push_str("    movzx rax, al\n");
+                    self.output.push_str("    push rax\n");
+                }
+                _ => panic!("Unsupported unary operator: {:?}", op),
+            },
             Expr::Call { name, args } => {
                 for arg in args {
                     self.generate_expression(arg, locals, globals);
@@ -568,8 +585,20 @@ main:
         let mut parser = Parser::new(lexer.tokenize());
         let cr = parser.parse_program();
         let code = Codegen::new().generate(&cr);
-
         assert!(code.contains("mov rcx, rdi"));
         assert!(code.contains("sar rax, cl"));
+    }
+
+    #[test]
+    fn test_codegen_modulo() {
+        let input = "main() { return 10 % 3; }";
+        let mut lexer = Lexer::new(input);
+        let mut parser = Parser::new(lexer.tokenize());
+        let cr = parser.parse_program();
+        let code = Codegen::new().generate(&cr);
+
+        assert!(code.contains("cqo"));
+        assert!(code.contains("idiv rdi"));
+        assert!(code.contains("mov rax, rdx"));
     }
 }

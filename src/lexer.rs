@@ -89,6 +89,10 @@ impl<'a> Lexer<'a> {
                 self.iter.next();
                 Some(Token::Slash)
             }
+            '%' => {
+                self.iter.next();
+                Some(Token::Percent)
+            }
             '&' => {
                 self.iter.next();
                 Some(Token::BitAnd)
@@ -97,21 +101,80 @@ impl<'a> Lexer<'a> {
                 self.iter.next();
                 Some(Token::BitOr)
             }
-            // '<<' => {
-            //     self.iter.next();
-            //     Some(Token::LShift)
-            // }
-            // '>>' => {
-            //     self.iter.next();
-            //     Some(Token::RShift)
-            // }
             '=' => {
                 self.iter.next();
-                if self.iter.peek() == Some(&'=') {
-                    self.iter.next();
-                    Some(Token::Equal)
-                } else {
-                    Some(Token::Assign)
+                match self.iter.peek() {
+                    Some(&'=') => {
+                        self.iter.next();
+                        if self.iter.peek() == Some(&'=') {
+                            self.iter.next();
+                            Some(Token::EqualAssign)
+                        } else {
+                            Some(Token::Equal)
+                        }
+                    }
+                    Some(&'+') => {
+                        self.iter.next();
+                        Some(Token::PlusAssign)
+                    }
+                    Some(&'-') => {
+                        self.iter.next();
+                        Some(Token::MinusAssign)
+                    }
+                    Some(&'*') => {
+                        self.iter.next();
+                        Some(Token::MulAssign)
+                    }
+                    Some(&'/') => {
+                        self.iter.next();
+                        Some(Token::DivAssign)
+                    }
+                    Some(&'%') => {
+                        self.iter.next();
+                        Some(Token::ModAssign)
+                    }
+                    Some(&'&') => {
+                        self.iter.next();
+                        Some(Token::BitAndAssign)
+                    }
+                    Some(&'|') => {
+                        self.iter.next();
+                        Some(Token::BitOrAssign)
+                    }
+                    Some(&'<') => {
+                        self.iter.next();
+                        if self.iter.peek() == Some(&'<') {
+                            self.iter.next();
+                            Some(Token::LShiftAssign)
+                        } else if self.iter.peek() == Some(&'=') {
+                            self.iter.next();
+                            Some(Token::LessEqualAssign)
+                        } else {
+                            Some(Token::LessAssign)
+                        }
+                    }
+                    Some(&'>') => {
+                        self.iter.next();
+                        if self.iter.peek() == Some(&'>') {
+                            self.iter.next();
+                            Some(Token::RShiftAssign)
+                        } else if self.iter.peek() == Some(&'=') {
+                            self.iter.next();
+                            Some(Token::GreaterEqualAssign)
+                        } else {
+                            Some(Token::GreaterAssign)
+                        }
+                    }
+                    Some(&'!') => {
+                        self.iter.next();
+                        if self.iter.peek() == Some(&'=') {
+                            self.iter.next();
+                            Some(Token::NotEqualAssign)
+                        } else {
+                            panic!("Expected '=' after '=!', but got {:?}", self.iter.peek());
+                        }
+                    }
+                    _ => Some(Token::Assign),
                 }
             }
             '!' => {
@@ -120,7 +183,7 @@ impl<'a> Lexer<'a> {
                     self.iter.next();
                     Some(Token::NotEqual)
                 } else {
-                    panic!("Unknown token: !");
+                    Some(Token::Not)
                 }
             }
             '<' => {

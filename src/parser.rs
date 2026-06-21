@@ -39,6 +39,27 @@ impl Parser {
         }
     }
 
+    fn compound_op_to_binary(&self, token: Token) -> Option<Token> {
+        match token {
+            Token::PlusAssign => Some(Token::Plus),
+            Token::MinusAssign => Some(Token::Minus),
+            Token::MulAssign => Some(Token::Star),
+            Token::DivAssign => Some(Token::Slash),
+            Token::ModAssign => Some(Token::Percent),
+            Token::BitAndAssign => Some(Token::BitAnd),
+            Token::BitOrAssign => Some(Token::BitOr),
+            Token::LShiftAssign => Some(Token::LShift),
+            Token::RShiftAssign => Some(Token::RShift),
+            Token::GreaterAssign => Some(Token::GreaterThan),
+            Token::LessAssign => Some(Token::LessThan),
+            Token::EqualAssign => Some(Token::Equal),
+            Token::NotEqualAssign => Some(Token::NotEqual),
+            Token::GreaterEqualAssign => Some(Token::GreaterEqual),
+            Token::LessEqualAssign => Some(Token::LessEqual),
+            _ => None,
+        }
+    }
+
     fn register_global(&mut self) {
         loop {
             if let Token::Identifier(name) = self.next_token() {
@@ -76,7 +97,7 @@ impl Parser {
     fn parse_function(&mut self) -> Function {
         self.vars.clear();
         self.next_offset = -8;
-        
+
         let name = match self.next_token() {
             Token::Main => "main".to_string(),
             Token::Identifier(n) => n,
@@ -105,7 +126,12 @@ impl Parser {
         self.consume(Token::RBrace);
 
         let locals = std::mem::take(&mut self.vars);
-        Function { name, params, body, locals }
+        Function {
+            name,
+            params,
+            body,
+            locals,
+        }
     }
 
     // "return" <expr> ";"
@@ -146,6 +172,20 @@ impl Parser {
                     let expr = self.parse_expression();
                     self.consume(Token::Semicolon);
                     Stmt::Assignment(name, expr)
+                } else if let Some(bin_op) = {
+                    let peeked = self.peek_token().clone();
+                    self.compound_op_to_binary(peeked)
+                } {
+                    // a =+ b  →  a = a + b
+                    self.next_token(); // consume compound assign token
+                    let rhs = self.parse_expression();
+                    self.consume(Token::Semicolon);
+                    let desugared = Expr::Binary {
+                        op: bin_op,
+                        left: Box::new(Expr::Identifier(name.clone())),
+                        right: Box::new(rhs),
+                    };
+                    Stmt::Assignment(name, desugared)
                 } else if *self.peek_token() == Token::LParen {
                     self.consume(Token::LParen);
                     let mut args = Vec::new();
@@ -164,7 +204,7 @@ impl Parser {
                     Stmt::Expr(Expr::Call { name, args })
                 } else {
                     panic!(
-                        "Expected '=' or '(' after identifier, but got {:?}",
+                        "Expected '=', compound assignment, or '(' after identifier, but got {:?}",
                         self.peek_token()
                     );
                 }
@@ -238,7 +278,11 @@ impl Parser {
         while *self.peek_token() == Token::BitOr {
             let op = self.next_token();
             let right = self.parse_bit_and();
-            left = Expr::Binary { op, left: Box::new(left), right: Box::new(right) }
+            left = Expr::Binary {
+                op,
+                left: Box::new(left),
+                right: Box::new(right),
+            }
         }
         left
     }
@@ -248,7 +292,11 @@ impl Parser {
         while *self.peek_token() == Token::BitAnd {
             let op = self.next_token();
             let right = self.parse_equality();
-            left = Expr::Binary { op , left: Box::new(left), right: Box::new(right) }
+            left = Expr::Binary {
+                op,
+                left: Box::new(left),
+                right: Box::new(right),
+            }
         }
         left
     }
@@ -291,7 +339,11 @@ impl Parser {
         while matches!(*self.peek_token(), Token::LShift | Token::RShift) {
             let op = self.next_token();
             let right = self.parse_add_sub();
-            left = Expr::Binary { op, left: Box::new(left), right: Box::new(right) }
+            left = Expr::Binary {
+                op,
+                left: Box::new(left),
+                right: Box::new(right),
+            }
         }
         left
     }
@@ -312,11 +364,14 @@ impl Parser {
     }
 
     fn parse_mul_div(&mut self) -> Expr {
-        let mut left = self.parse_primary();
+        let mut left = self.parse_unary();
 
-        while *self.peek_token() == Token::Star || *self.peek_token() == Token::Slash {
+        while matches!(
+            *self.peek_token(),
+            Token::Star | Token::Slash | Token::Percent
+        ) {
             let op = self.next_token();
-            let right = self.parse_primary();
+            let right = self.parse_unary();
             left = Expr::Binary {
                 op,
                 left: Box::new(left),
@@ -324,6 +379,20 @@ impl Parser {
             }
         }
         left
+    }
+
+    fn parse_unary(&mut self) -> Expr {
+        match self.peek_token() {
+            Token::Not => {
+                self.next_token();
+                let expr = self.parse_unary();
+                Expr::Unary {
+                    op: Token::Not,
+                    expr: Box::new(expr),
+                }
+            }
+            _ => self.parse_primary(),
+        }
     }
 
     fn parse_primary(&mut self) -> Expr {
@@ -736,5 +805,138 @@ mod tests {
         let func = &program.functions[0];
         assert!(func.locals.contains_key("x"));
         assert!(program.globals.contains_key("x"));
+    }
+
+    fn parse_one(input: &str) -> Stmt {
+        let mut lexer = Lexer::new(input);
+        let mut parser = Parser::new(lexer.tokenize());
+        let program = parser.parse_program();
+        program.functions[0].body[1].clone() // body[0] = auto x; body[1] = 複合代入
+    }
+
+    #[test]
+    fn test_parser_plus_assign() {
+        // x =+ 5  →  x = x + 5
+        let stmt = parse_one("main() { auto x; x =+ 5; }");
+        if let Stmt::Assignment(name, Expr::Binary { op, left, right }) = stmt {
+            assert_eq!(name, "x");
+            assert_eq!(op, Token::Plus);
+            assert!(matches!(*left, Expr::Identifier(ref n) if n == "x"));
+            assert!(matches!(*right, Expr::Integer(5)));
+        } else {
+            panic!("Expected desugared Assignment");
+        }
+    }
+
+    #[test]
+    fn test_parser_minus_assign() {
+        // x =- 3  →  x = x - 3
+        let stmt = parse_one("main() { auto x; x =- 3; }");
+        if let Stmt::Assignment(name, Expr::Binary { op, left, right }) = stmt {
+            assert_eq!(name, "x");
+            assert_eq!(op, Token::Minus);
+            assert!(matches!(*left, Expr::Identifier(ref n) if n == "x"));
+            assert!(matches!(*right, Expr::Integer(3)));
+        } else {
+            panic!("Expected desugared Assignment");
+        }
+    }
+
+    #[test]
+    fn test_parser_mul_assign() {
+        // x =* 2  →  x = x * 2
+        let stmt = parse_one("main() { auto x; x =* 2; }");
+        if let Stmt::Assignment(name, Expr::Binary { op, left, right }) = stmt {
+            assert_eq!(name, "x");
+            assert_eq!(op, Token::Star);
+            assert!(matches!(*left, Expr::Identifier(ref n) if n == "x"));
+            assert!(matches!(*right, Expr::Integer(2)));
+        } else {
+            panic!("Expected desugared Assignment");
+        }
+    }
+
+    #[test]
+    fn test_parser_div_assign() {
+        // x =/ 4  →  x = x / 4
+        let stmt = parse_one("main() { auto x; x =/ 4; }");
+        if let Stmt::Assignment(name, Expr::Binary { op, left, right }) = stmt {
+            assert_eq!(name, "x");
+            assert_eq!(op, Token::Slash);
+            assert!(matches!(*left, Expr::Identifier(ref n) if n == "x"));
+            assert!(matches!(*right, Expr::Integer(4)));
+        } else {
+            panic!("Expected desugared Assignment");
+        }
+    }
+
+    #[test]
+    fn test_parser_mod_assign() {
+        // x =% 3  →  x = x % 3
+        let stmt = parse_one("main() { auto x; x =% 3; }");
+        if let Stmt::Assignment(name, Expr::Binary { op, left, right }) = stmt {
+            assert_eq!(name, "x");
+            assert_eq!(op, Token::Percent);
+            assert!(matches!(*left, Expr::Identifier(ref n) if n == "x"));
+            assert!(matches!(*right, Expr::Integer(3)));
+        } else {
+            panic!("Expected desugared Assignment");
+        }
+    }
+
+    #[test]
+    fn test_parser_bitand_assign() {
+        // x =& 7  →  x = x & 7
+        let stmt = parse_one("main() { auto x; x =& 7; }");
+        if let Stmt::Assignment(name, Expr::Binary { op, left, right }) = stmt {
+            assert_eq!(name, "x");
+            assert_eq!(op, Token::BitAnd);
+            assert!(matches!(*left, Expr::Identifier(ref n) if n == "x"));
+            assert!(matches!(*right, Expr::Integer(7)));
+        } else {
+            panic!("Expected desugared Assignment");
+        }
+    }
+
+    #[test]
+    fn test_parser_bitor_assign() {
+        // x =| 3  →  x = x | 3
+        let stmt = parse_one("main() { auto x; x =| 3; }");
+        if let Stmt::Assignment(name, Expr::Binary { op, left, right }) = stmt {
+            assert_eq!(name, "x");
+            assert_eq!(op, Token::BitOr);
+            assert!(matches!(*left, Expr::Identifier(ref n) if n == "x"));
+            assert!(matches!(*right, Expr::Integer(3)));
+        } else {
+            panic!("Expected desugared Assignment");
+        }
+    }
+
+    #[test]
+    fn test_parser_lshift_assign() {
+        // x =<< 2  →  x = x << 2
+        let stmt = parse_one("main() { auto x; x =<< 2; }");
+        if let Stmt::Assignment(name, Expr::Binary { op, left, right }) = stmt {
+            assert_eq!(name, "x");
+            assert_eq!(op, Token::LShift);
+            assert!(matches!(*left, Expr::Identifier(ref n) if n == "x"));
+            assert!(matches!(*right, Expr::Integer(2)));
+        } else {
+            panic!("Expected desugared Assignment");
+        }
+    }
+
+    #[test]
+    fn test_parser_rshift_assign() {
+        // x =>> 1  →  x = x >> 1
+        let stmt = parse_one("main() { auto x; x =>> 1; }");
+        if let Stmt::Assignment(name, Expr::Binary { op, left, right }) = stmt {
+            assert_eq!(name, "x");
+            assert_eq!(op, Token::RShift);
+            assert!(matches!(*left, Expr::Identifier(ref n) if n == "x"));
+            assert!(matches!(*right, Expr::Integer(1)));
+        } else {
+            panic!("Expected desugared Assignment");
+        }
     }
 }
