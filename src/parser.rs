@@ -175,70 +175,77 @@ impl Parser {
             }
             Token::Identifier(name) => {
                 self.next_token();
-
-                if *self.peek_token() == Token::Assign {
-                    self.consume(Token::Assign);
-                    let expr = self.parse_expression();
-                    self.consume(Token::Semicolon);
-                    Stmt::Assignment(name, expr)
-                } else if let Some(bin_op) = {
-                    let peeked = self.peek_token().clone();
-                    self.compound_op_to_binary(peeked)
-                } {
-                    // a =+ b  →  a = a + b
-                    self.next_token(); // consume compound assign token
-                    let rhs = self.parse_expression();
-                    self.consume(Token::Semicolon);
-                    let desugared = Expr::Binary {
-                        op: bin_op,
-                        left: Box::new(Expr::Identifier(name.clone())),
-                        right: Box::new(rhs),
-                    };
-                    Stmt::Assignment(name, desugared)
-                } else if *self.peek_token() == Token::Increment {
-                    if !self.vars.contains_key(&name) && !self.global_vars.contains_key(&name) {
-                        panic!("Undefined variable: {}", name);
+                match self.peek_token() {
+                    Token::Assign => {
+                        self.consume(Token::Assign);
+                        let expr = self.parse_expression();
+                        self.consume(Token::Semicolon);
+                        Stmt::Assignment(name, expr)
                     }
-                    self.next_token();
-                    self.consume(Token::Semicolon);
-                    Stmt::Expr(Expr::Postfix {
-                        op: Token::Increment,
-                        name,
-                    })
-                } else if *self.peek_token() == Token::Decrement {
-                    if !self.vars.contains_key(&name) && !self.global_vars.contains_key(&name) {
-                        panic!("Undefined variable: {}", name);
+                    Token::Increment => {
+                        if !self.vars.contains_key(&name) && !self.global_vars.contains_key(&name)
+                        {
+                            panic!("Undefined variable: {}", name);
+                        }
+                        self.next_token();
+                        self.consume(Token::Semicolon);
+                        Stmt::Expr(Expr::Postfix {
+                            op: Token::Increment,
+                            name,
+                        })
                     }
-                    self.next_token();
-                    self.consume(Token::Semicolon);
-                    Stmt::Expr(Expr::Postfix {
-                        op: Token::Decrement,
-                        name,
-                    })
-                } else if *self.peek_token() == Token::LParen {
-                    self.consume(Token::LParen);
-                    let mut args = Vec::new();
-                    if *self.peek_token() != Token::RParen {
-                        loop {
-                            args.push(self.parse_expression());
-                            if *self.peek_token() == Token::Comma {
-                                self.consume(Token::Comma);
-                            } else {
-                                break;
+                    Token::Decrement => {
+                        if !self.vars.contains_key(&name) && !self.global_vars.contains_key(&name)
+                        {
+                            panic!("Undefined variable: {}", name);
+                        }
+                        self.next_token();
+                        self.consume(Token::Semicolon);
+                        Stmt::Expr(Expr::Postfix {
+                            op: Token::Decrement,
+                            name,
+                        })
+                    }
+                    Token::LParen => {
+                        self.consume(Token::LParen);
+                        let mut args = Vec::new();
+                        if *self.peek_token() != Token::RParen {
+                            loop {
+                                args.push(self.parse_expression());
+                                if *self.peek_token() == Token::Comma {
+                                    self.consume(Token::Comma);
+                                } else {
+                                    break;
+                                }
                             }
                         }
+                        self.consume(Token::RParen);
+                        self.consume(Token::Semicolon);
+                        Stmt::Expr(Expr::Call { name, args })
                     }
-                    self.consume(Token::RParen);
-                    self.consume(Token::Semicolon);
-                    Stmt::Expr(Expr::Call { name, args })
-                } else if *self.peek_token() == Token::Colon {
-                    self.consume(Token::Colon);
-                    Stmt::Label(name)
-                } else {
-                    panic!(
-                        "Expected '=', compound assignment, '(', ':', '++', or '--' after identifier, but got {:?}",
-                        self.peek_token()
-                    );
+                    Token::Colon => {
+                        self.consume(Token::Colon);
+                        Stmt::Label(name)
+                    }
+                    _ => {
+                        let peeked = self.peek_token().clone();
+                        if let Some(bin_op) = self.compound_op_to_binary(peeked) {
+                            self.next_token();
+                            let rhs = self.parse_expression();
+                            self.consume(Token::Semicolon);
+                            let desugared = Expr::Binary {
+                                op: bin_op,
+                                left: Box::new(Expr::Identifier(name.clone())),
+                                right: Box::new(rhs),
+                            };
+                            Stmt::Assignment(name, desugared)
+                        } else {
+                            panic!(
+                                "Expected '=', compound assignment, '(', ':', '++', or '--' after identifier, but got {:?}",
+                                self.peek_token()
+                            );
+                        }
+                    }
                 }
             }
             Token::If => {
