@@ -141,235 +141,250 @@ impl Parser {
         }
     }
 
-    // "return" <expr> ";"
+    fn parse_return_stmt(&mut self) -> Stmt {
+        self.consume(Token::Return);
+        let expr = self.parse_expression();
+        self.consume(Token::Semicolon);
+        Stmt::Return(expr)
+    }
+
+    fn parse_auto_stmt(&mut self) -> Stmt {
+        self.consume(Token::Auto);
+        loop {
+            if let Token::Identifier(name) = self.peek_token().clone() {
+                self.next_token();
+                self.next_offset -= 8;
+                self.vars.insert(name, self.next_offset);
+
+                if *self.peek_token() == Token::Comma {
+                    self.next_token();
+                    continue;
+                }
+            }
+            break;
+        }
+        self.consume(Token::Semicolon);
+        Stmt::Declaration
+    }
+
+    fn parse_goto_stmt(&mut self) -> Stmt {
+        self.consume(Token::Goto);
+        let label = match self.next_token() {
+            Token::Identifier(n) => n,
+            _ => panic!("Expected label name"),
+        };
+        self.consume(Token::Semicolon);
+        Stmt::Goto(label)
+    }
+
+    fn parse_identifier_stmt(&mut self, name: String) -> Stmt {
+        self.next_token();
+        match self.peek_token() {
+            Token::Assign => {
+                self.consume(Token::Assign);
+                let expr = self.parse_expression();
+                self.consume(Token::Semicolon);
+                Stmt::Assignment(name, expr)
+            }
+            Token::Increment => {
+                if !self.vars.contains_key(&name) && !self.global_vars.contains_key(&name) {
+                    panic!("Undefined variable: {}", name);
+                }
+                self.next_token();
+                self.consume(Token::Semicolon);
+                Stmt::Expr(Expr::Postfix {
+                    op: Token::Increment,
+                    name,
+                })
+            }
+            Token::Decrement => {
+                if !self.vars.contains_key(&name) && !self.global_vars.contains_key(&name) {
+                    panic!("Undefined variable: {}", name);
+                }
+                self.next_token();
+                self.consume(Token::Semicolon);
+                Stmt::Expr(Expr::Postfix {
+                    op: Token::Decrement,
+                    name,
+                })
+            }
+            Token::LParen => {
+                self.consume(Token::LParen);
+                let mut args = Vec::new();
+                if *self.peek_token() != Token::RParen {
+                    loop {
+                        args.push(self.parse_expression());
+                        if *self.peek_token() == Token::Comma {
+                            self.consume(Token::Comma);
+                        } else {
+                            break;
+                        }
+                    }
+                }
+                self.consume(Token::RParen);
+                self.consume(Token::Semicolon);
+                Stmt::Expr(Expr::Call { name, args })
+            }
+            Token::Colon => {
+                self.consume(Token::Colon);
+                Stmt::Label(name)
+            }
+            _ => {
+                let peeked = self.peek_token().clone();
+                if let Some(bin_op) = self.compound_op_to_binary(peeked) {
+                    self.next_token();
+                    let rhs = self.parse_expression();
+                    self.consume(Token::Semicolon);
+                    let desugared = Expr::Binary {
+                        op: bin_op,
+                        left: Box::new(Expr::Identifier(name.clone())),
+                        right: Box::new(rhs),
+                    };
+                    Stmt::Assignment(name, desugared)
+                } else {
+                    panic!(
+                        "Expected '=', compound assignment, '(', ':', '++', or '--' after identifier, but got {:?}",
+                        self.peek_token()
+                    );
+                }
+            }
+        }
+    }
+
+    fn parse_if_stmt(&mut self) -> Stmt {
+        self.consume(Token::If);
+        self.consume(Token::LParen);
+        let cond = self.parse_expression();
+        self.consume(Token::RParen);
+
+        let mut then_body = Vec::new();
+        if *self.peek_token() == Token::LBrace {
+            self.consume(Token::LBrace);
+            while *self.peek_token() != Token::RBrace {
+                then_body.push(self.parse_statement());
+            }
+            self.consume(Token::RBrace);
+        } else {
+            then_body.push(self.parse_statement());
+        }
+        let mut else_body = None;
+        if *self.peek_token() == Token::Else {
+            self.consume(Token::Else);
+            let mut body = Vec::new();
+            if *self.peek_token() == Token::LBrace {
+                self.consume(Token::LBrace);
+                while *self.peek_token() != Token::RBrace {
+                    body.push(self.parse_statement());
+                }
+                self.consume(Token::RBrace);
+            } else {
+                body.push(self.parse_statement());
+            }
+            else_body = Some(body);
+        }
+        Stmt::If {
+            cond,
+            then_body,
+            else_body,
+        }
+    }
+
+    fn parse_prefix_inc_stmt(&mut self) -> Stmt {
+        self.next_token();
+        if let Token::Identifier(name) = self.next_token() {
+            if !self.vars.contains_key(&name) && !self.global_vars.contains_key(&name) {
+                panic!("Undefined variable: {}", name);
+            }
+            self.consume(Token::Semicolon);
+            Stmt::Expr(Expr::Prefix {
+                op: Token::Increment,
+                name,
+            })
+        } else {
+            panic!("Expected identifier after '++'");
+        }
+    }
+
+    fn parse_prefix_dec_stmt(&mut self) -> Stmt {
+        self.next_token();
+        if let Token::Identifier(name) = self.next_token() {
+            if !self.vars.contains_key(&name) && !self.global_vars.contains_key(&name) {
+                panic!("Undefined variable: {}", name);
+            }
+            self.consume(Token::Semicolon);
+            Stmt::Expr(Expr::Prefix {
+                op: Token::Decrement,
+                name,
+            })
+        } else {
+            panic!("Expected identifier after '--'");
+        }
+    }
+
+    fn parse_while_stmt(&mut self) -> Stmt {
+        self.consume(Token::While);
+        self.consume(Token::LParen);
+        let cond = self.parse_expression();
+        self.consume(Token::RParen);
+
+        let mut body = Vec::new();
+        if *self.peek_token() == Token::LBrace {
+            self.consume(Token::LBrace);
+            while *self.peek_token() != Token::RBrace {
+                body.push(self.parse_statement());
+            }
+            self.consume(Token::RBrace);
+        } else {
+            body.push(self.parse_statement());
+        }
+
+        Stmt::While { cond, body }
+    }
+
+    fn parse_switch_stmt(&mut self) -> Stmt {
+        self.consume(Token::Switch);
+        self.consume(Token::LParen);
+        let cond = self.parse_expression();
+        self.consume(Token::RParen);
+
+        let id = self.next_switch_id();
+        let mut cases = Vec::new();
+        let mut body = Vec::new();
+
+        self.consume(Token::LBrace);
+        while *self.peek_token() != Token::RBrace {
+            if *self.peek_token() == Token::Case {
+                self.consume(Token::Case);
+                let val = match self.next_token() {
+                    Token::Integer(v) => v,
+                    _ => panic!("Expected integer value after case keyword"),
+                };
+                self.consume(Token::Colon);
+
+                let label_name = format!("sw_{}_case_{}", id, val);
+                cases.push((val, label_name.clone()));
+                body.push(Stmt::Label(label_name));
+            } else {
+                body.push(self.parse_statement());
+            }
+        }
+        self.consume(Token::RBrace);
+
+        Stmt::Switch { cond, cases, body }
+    }
+
     fn parse_statement(&mut self) -> Stmt {
         let token = self.peek_token().clone();
         match token {
-            Token::Return => {
-                self.consume(Token::Return);
-                let expr = self.parse_expression();
-                self.consume(Token::Semicolon);
-                Stmt::Return(expr)
-            }
-            Token::Auto => {
-                self.consume(Token::Auto);
-                let mut names = Vec::new();
-                loop {
-                    if let Token::Identifier(name) = self.peek_token().clone() {
-                        self.next_token();
-                        self.next_offset -= 8;
-                        self.vars.insert(name.clone(), self.next_offset);
-                        names.push(name);
-
-                        if *self.peek_token() == Token::Comma {
-                            self.next_token();
-                            continue;
-                        }
-                    }
-                    break;
-                }
-                self.consume(Token::Semicolon);
-                Stmt::Declaration(names)
-            }
-            Token::Goto => {
-                self.consume(Token::Goto);
-                let label = match self.next_token() {
-                    Token::Identifier(n) => n,
-                    _ => panic!("Expected label name"),
-                };
-                self.consume(Token::Semicolon);
-                Stmt::Goto(label)
-            }
-            Token::Identifier(name) => {
-                self.next_token();
-                match self.peek_token() {
-                    Token::Assign => {
-                        self.consume(Token::Assign);
-                        let expr = self.parse_expression();
-                        self.consume(Token::Semicolon);
-                        Stmt::Assignment(name, expr)
-                    }
-                    Token::Increment => {
-                        if !self.vars.contains_key(&name) && !self.global_vars.contains_key(&name) {
-                            panic!("Undefined variable: {}", name);
-                        }
-                        self.next_token();
-                        self.consume(Token::Semicolon);
-                        Stmt::Expr(Expr::Postfix {
-                            op: Token::Increment,
-                            name,
-                        })
-                    }
-                    Token::Decrement => {
-                        if !self.vars.contains_key(&name) && !self.global_vars.contains_key(&name) {
-                            panic!("Undefined variable: {}", name);
-                        }
-                        self.next_token();
-                        self.consume(Token::Semicolon);
-                        Stmt::Expr(Expr::Postfix {
-                            op: Token::Decrement,
-                            name,
-                        })
-                    }
-                    Token::LParen => {
-                        self.consume(Token::LParen);
-                        let mut args = Vec::new();
-                        if *self.peek_token() != Token::RParen {
-                            loop {
-                                args.push(self.parse_expression());
-                                if *self.peek_token() == Token::Comma {
-                                    self.consume(Token::Comma);
-                                } else {
-                                    break;
-                                }
-                            }
-                        }
-                        self.consume(Token::RParen);
-                        self.consume(Token::Semicolon);
-                        Stmt::Expr(Expr::Call { name, args })
-                    }
-                    Token::Colon => {
-                        self.consume(Token::Colon);
-                        Stmt::Label(name)
-                    }
-                    _ => {
-                        let peeked = self.peek_token().clone();
-                        if let Some(bin_op) = self.compound_op_to_binary(peeked) {
-                            self.next_token();
-                            let rhs = self.parse_expression();
-                            self.consume(Token::Semicolon);
-                            let desugared = Expr::Binary {
-                                op: bin_op,
-                                left: Box::new(Expr::Identifier(name.clone())),
-                                right: Box::new(rhs),
-                            };
-                            Stmt::Assignment(name, desugared)
-                        } else {
-                            panic!(
-                                "Expected '=', compound assignment, '(', ':', '++', or '--' after identifier, but got {:?}",
-                                self.peek_token()
-                            );
-                        }
-                    }
-                }
-            }
-            Token::If => {
-                self.consume(Token::If);
-                self.consume(Token::LParen);
-                let cond = self.parse_expression();
-                self.consume(Token::RParen);
-
-                let mut then_body = Vec::new();
-                if *self.peek_token() == Token::LBrace {
-                    self.consume(Token::LBrace);
-                    while *self.peek_token() != Token::RBrace {
-                        then_body.push(self.parse_statement());
-                    }
-                    self.consume(Token::RBrace);
-                } else {
-                    then_body.push(self.parse_statement());
-                }
-                let mut else_body = None;
-                if *self.peek_token() == Token::Else {
-                    self.consume(Token::Else);
-                    let mut body = Vec::new();
-                    if *self.peek_token() == Token::LBrace {
-                        self.consume(Token::LBrace);
-                        while *self.peek_token() != Token::RBrace {
-                            body.push(self.parse_statement());
-                        }
-                        self.consume(Token::RBrace);
-                    } else {
-                        body.push(self.parse_statement());
-                    }
-                    else_body = Some(body);
-                }
-                Stmt::If {
-                    cond,
-                    then_body,
-                    else_body,
-                }
-            }
-            Token::Increment => {
-                self.next_token();
-                if let Token::Identifier(name) = self.next_token() {
-                    if !self.vars.contains_key(&name) && !self.global_vars.contains_key(&name) {
-                        panic!("Undefined variable: {}", name);
-                    }
-                    self.consume(Token::Semicolon);
-                    Stmt::Expr(Expr::Prefix {
-                        op: Token::Increment,
-                        name,
-                    })
-                } else {
-                    panic!("Expected identifier after '++'");
-                }
-            }
-            Token::Decrement => {
-                self.next_token();
-                if let Token::Identifier(name) = self.next_token() {
-                    if !self.vars.contains_key(&name) && !self.global_vars.contains_key(&name) {
-                        panic!("Undefined variable: {}", name);
-                    }
-                    self.consume(Token::Semicolon);
-                    Stmt::Expr(Expr::Prefix {
-                        op: Token::Decrement,
-                        name,
-                    })
-                } else {
-                    panic!("Expected identifier after '--'");
-                }
-            }
-            Token::While => {
-                self.consume(Token::While);
-                self.consume(Token::LParen);
-                let cond = self.parse_expression();
-                self.consume(Token::RParen);
-
-                let mut body = Vec::new();
-                if *self.peek_token() == Token::LBrace {
-                    self.consume(Token::LBrace);
-                    while *self.peek_token() != Token::RBrace {
-                        body.push(self.parse_statement());
-                    }
-                    self.consume(Token::RBrace);
-                } else {
-                    body.push(self.parse_statement());
-                }
-
-                Stmt::While { cond, body }
-            }
-            Token::Switch => {
-                self.consume(Token::Switch);
-                self.consume(Token::LParen);
-                let cond = self.parse_expression();
-                self.consume(Token::RParen);
-
-                let id = self.next_switch_id();
-                let mut cases = Vec::new();
-                let mut body = Vec::new();
-
-                self.consume(Token::LBrace);
-                while *self.peek_token() != Token::RBrace {
-                    if *self.peek_token() == Token::Case {
-                        self.consume(Token::Case);
-                        let val = match self.next_token() {
-                            Token::Integer(v) => v,
-                            _ => panic!("Expected integer value after case keyword"),
-                        };
-                        self.consume(Token::Colon);
-
-                        let label_name = format!("sw_{}_case_{}", id, val);
-                        cases.push((val, label_name.clone()));
-                        body.push(Stmt::Label(label_name));
-                    } else {
-                        body.push(self.parse_statement());
-                    }
-                }
-                self.consume(Token::RBrace);
-
-                Stmt::Switch { id, cond, cases, body }
-            }
+            Token::Return => self.parse_return_stmt(),
+            Token::Auto => self.parse_auto_stmt(),
+            Token::Goto => self.parse_goto_stmt(),
+            Token::Identifier(name) => self.parse_identifier_stmt(name),
+            Token::If => self.parse_if_stmt(),
+            Token::Increment => self.parse_prefix_inc_stmt(),
+            Token::Decrement => self.parse_prefix_dec_stmt(),
+            Token::While => self.parse_while_stmt(),
+            Token::Switch => self.parse_switch_stmt(),
             _ => panic!("Unsupported statement: {:?}", token),
         }
     }
@@ -486,106 +501,123 @@ impl Parser {
         left
     }
 
+    fn parse_unary_not(&mut self) -> Expr {
+        self.next_token();
+        let expr = self.parse_unary();
+        Expr::Unary {
+            op: Token::Not,
+            expr: Box::new(expr),
+        }
+    }
+
+    fn parse_unary_minus(&mut self) -> Expr {
+        self.next_token();
+        let expr = self.parse_unary();
+        Expr::Unary {
+            op: Token::Minus,
+            expr: Box::new(expr),
+        }
+    }
+
+    fn parse_unary_increment(&mut self) -> Expr {
+        self.next_token();
+        let expr = self.parse_unary();
+        match expr {
+            Expr::Identifier(name) => Expr::Prefix {
+                op: Token::Increment,
+                name,
+            },
+            _ => panic!("Invalid operand for '++'"),
+        }
+    }
+
+    fn parse_unary_decrement(&mut self) -> Expr {
+        self.next_token();
+        let expr = self.parse_unary();
+        match expr {
+            Expr::Identifier(name) => Expr::Prefix {
+                op: Token::Decrement,
+                name,
+            },
+            _ => panic!("Invalid operand for '--'"),
+        }
+    }
+
     fn parse_unary(&mut self) -> Expr {
         match self.peek_token() {
-            Token::Not => {
-                self.next_token();
-                let expr = self.parse_unary();
-                Expr::Unary {
-                    op: Token::Not,
-                    expr: Box::new(expr),
-                }
-            }
-            Token::Minus => {
-                self.next_token();
-                let expr = self.parse_unary();
-                Expr::Unary {
-                    op: Token::Minus,
-                    expr: Box::new(expr),
-                }
-            }
-            Token::Increment => {
-                self.next_token();
-                let expr = self.parse_unary();
-                match expr {
-                    Expr::Identifier(name) => Expr::Prefix {
-                        op: Token::Increment,
-                        name,
-                    },
-                    _ => panic!("Invalid operand for '++'"),
-                }
-            }
-            Token::Decrement => {
-                self.next_token();
-                let expr = self.parse_unary();
-                match expr {
-                    Expr::Identifier(name) => Expr::Prefix {
-                        op: Token::Decrement,
-                        name,
-                    },
-                    _ => panic!("Invalid operand for '--'"),
-                }
-            }
+            Token::Not => self.parse_unary_not(),
+            Token::Minus => self.parse_unary_minus(),
+            Token::Increment => self.parse_unary_increment(),
+            Token::Decrement => self.parse_unary_decrement(),
             _ => self.parse_primary(),
         }
+    }
+
+    fn parse_primary_integer(&mut self) -> Expr {
+        let val = match self.next_token() {
+            Token::Integer(v) => v,
+            _ => unreachable!(),
+        };
+        Expr::Integer(val)
+    }
+
+    fn parse_primary_identifier(&mut self, name: String) -> Expr {
+        self.next_token();
+        if *self.peek_token() == Token::Increment {
+            if !self.vars.contains_key(&name) && !self.global_vars.contains_key(&name) {
+                panic!("Undefined variable: {}", name);
+            }
+            self.next_token();
+            Expr::Postfix {
+                op: Token::Increment,
+                name,
+            }
+        } else if *self.peek_token() == Token::Decrement {
+            if !self.vars.contains_key(&name) && !self.global_vars.contains_key(&name) {
+                panic!("Undefined variable: {}", name);
+            }
+            self.next_token();
+            Expr::Postfix {
+                op: Token::Decrement,
+                name,
+            }
+        } else if *self.peek_token() == Token::LParen {
+            self.consume(Token::LParen);
+            let mut args = Vec::new();
+
+            if *self.peek_token() != Token::RParen {
+                loop {
+                    args.push(self.parse_expression());
+                    if *self.peek_token() == Token::Comma {
+                        self.consume(Token::Comma);
+                    } else {
+                        break;
+                    }
+                }
+            }
+            self.consume(Token::RParen);
+            Expr::Call { name, args }
+        } else {
+            if !self.vars.contains_key(&name) && !self.global_vars.contains_key(&name) {
+                panic!("Undefined variable: {}", name);
+            }
+            Expr::Identifier(name)
+        }
+    }
+
+    fn parse_primary_paren(&mut self) -> Expr {
+        self.consume(Token::LParen);
+        let expr = self.parse_expression();
+        self.consume(Token::RParen);
+        expr
     }
 
     fn parse_primary(&mut self) -> Expr {
         let token = self.peek_token().clone();
         match token {
-            Token::Integer(val) => {
-                self.next_token();
-                Expr::Integer(val)
-            }
-            Token::Identifier(name) => {
-                self.next_token();
-                if *self.peek_token() == Token::Increment {
-                    if !self.vars.contains_key(&name) && !self.global_vars.contains_key(&name) {
-                        panic!("Undefined variable: {}", name);
-                    }
-                    self.next_token();
-                    Expr::Postfix {
-                        op: Token::Increment,
-                        name,
-                    }
-                } else if *self.peek_token() == Token::Decrement {
-                    if !self.vars.contains_key(&name) && !self.global_vars.contains_key(&name) {
-                        panic!("Undefined variable: {}", name);
-                    }
-                    self.next_token();
-                    Expr::Postfix {
-                        op: Token::Decrement,
-                        name,
-                    }
-                } else if *self.peek_token() == Token::LParen {
-                    self.consume(Token::LParen);
-                    let mut args = Vec::new();
-
-                    if *self.peek_token() != Token::RParen {
-                        loop {
-                            args.push(self.parse_expression());
-                            if *self.peek_token() == Token::Comma {
-                                self.consume(Token::Comma);
-                            } else {
-                                break;
-                            }
-                        }
-                    }
-                    self.consume(Token::RParen);
-                    Expr::Call { name, args }
-                } else {
-                    if !self.vars.contains_key(&name) && !self.global_vars.contains_key(&name) {
-                        panic!("Undefined variable: {}", name);
-                    }
-                    Expr::Identifier(name)
-                }
-            }
-            Token::LParen => {
-                self.consume(Token::LParen);
-                let expr = self.parse_expression();
-                self.consume(Token::RParen);
-                expr
-            }
+            Token::Integer(_) => self.parse_primary_integer(),
+            Token::Identifier(name) => self.parse_primary_identifier(name),
+            Token::LParen => self.parse_primary_paren(),
             _ => panic!("Expected expression, but got {:?}", token),
         }
     }
@@ -620,11 +652,7 @@ mod tests {
         let func = &cr.functions[0];
         assert_eq!(func.body.len(), 4);
 
-        if let Stmt::Declaration(names) = &func.body[0] {
-            assert_eq!(names, &vec!["x".to_string(), "y".to_string()]);
-        } else {
-            panic!("Expected Stmt::Declaration");
-        }
+        assert!(matches!(&func.body[0], Stmt::Declaration));
 
         if let Stmt::Assignment(name, expr) = &func.body[1] {
             assert_eq!(name, "x");
@@ -1277,7 +1305,7 @@ mod tests {
 
         assert_eq!(body.len(), 2);
         assert!(matches!(&body[1], Stmt::Switch { .. }));
-        if let Stmt::Switch { id: _, cond: _, cases, body: switch_body } = &body[1] {
+        if let Stmt::Switch { cond: _, cases, body: switch_body } = &body[1] {
             assert_eq!(cases.len(), 2);
             assert_eq!(cases[0], (1, format!("sw_1_case_1")));
             assert_eq!(cases[1], (2, format!("sw_1_case_2")));

@@ -30,7 +30,7 @@ impl Codegen {
         self.output.push_str(".intel_syntax noprefix\n");
         self.output.push_str(".global main\n\n");
 
-        for (_name, label) in &program.globals {
+        for label in program.globals.values() {
             self.output.push_str(&format!(".comm {}, 8, 8\n", label));
         }
 
@@ -71,6 +71,150 @@ impl Codegen {
         self.output.push_str("    ret\n");
     }
 
+    fn generate_return_stmt(
+        &mut self,
+        expr: &Expr,
+        locals: &HashMap<String, i64>,
+        globals: &HashMap<String, String>,
+    ) {
+        self.generate_expression(expr, locals, globals);
+
+        self.output.push_str("    pop rax\n");
+        self.output.push_str("    mov rsp, rbp\n");
+        self.output.push_str("    pop rbp\n");
+        self.output.push_str("    ret\n");
+    }
+
+    fn generate_assignment_stmt(
+        &mut self,
+        name: &str,
+        expr: &Expr,
+        locals: &HashMap<String, i64>,
+        globals: &HashMap<String, String>,
+    ) {
+        self.generate_expression(expr, locals, globals);
+
+        self.output.push_str("    pop rax\n");
+
+        if let Some(offset) = locals.get(name) {
+            self.output
+                .push_str(&format!("    mov [rbp + {}], rax\n", offset));
+        } else if let Some(label) = globals.get(name) {
+            self.output
+                .push_str(&format!("    mov [rip + {}], rax\n", label));
+        } else {
+            panic!("Undefined variable: {}", name);
+        }
+    }
+
+    fn generate_declaration_stmt(&mut self) {}
+
+    fn generate_label_stmt(&mut self, name: &str) {
+        self.output
+            .push_str(&format!(".L{}_{}:\n", self.current_func_name, name));
+    }
+
+    fn generate_goto_stmt(&mut self, name: &str) {
+        self.output
+            .push_str(&format!("    jmp .L{}_{}\n", self.current_func_name, name));
+    }
+
+    fn generate_if_stmt(
+        &mut self,
+        cond: &Expr,
+        then_body: &[Stmt],
+        else_body: &Option<Vec<Stmt>>,
+        locals: &HashMap<String, i64>,
+        globals: &HashMap<String, String>,
+    ) {
+        let id = self.new_label();
+
+        self.generate_expression(cond, locals, globals);
+        self.output.push_str("    pop rax\n");
+        self.output.push_str("    cmp rax, 0\n");
+
+        if let Some(else_stmts) = else_body {
+            self.output.push_str(&format!("    je .L_ELSE_{}\n", id));
+                for stmt in then_body {
+                    self.generate_statement(stmt, locals, globals);
+                }
+                self.output.push_str(&format!("    jmp .L_END_{}\n", id));
+
+                self.output.push_str(&format!(".L_ELSE_{}:\n", id));
+                for stmt in else_stmts {
+                    self.generate_statement(stmt, locals, globals);
+                }
+                self.output.push_str(&format!(".L_END_{}:\n", id));
+            } else {
+                self.output.push_str(&format!("    je .L_END_{}\n", id));
+                for stmt in then_body {
+                    self.generate_statement(stmt, locals, globals);
+                }
+            self.output.push_str(&format!(".L_END_{}:\n", id));
+        }
+    }
+
+    fn generate_while_stmt(
+        &mut self,
+        cond: &Expr,
+        body: &[Stmt],
+        locals: &HashMap<String, i64>,
+        globals: &HashMap<String, String>,
+    ) {
+        let id = self.new_label();
+
+        self.output.push_str(&format!(".L_WHILE_START_{}:\n", id));
+
+        self.generate_expression(cond, locals, globals);
+        self.output.push_str("    pop rax\n");
+        self.output.push_str("    cmp rax, 0\n");
+
+        self.output
+            .push_str(&format!("    je .L_WHILE_END_{}\n", id));
+
+        for stmt in body {
+            self.generate_statement(stmt, locals, globals);
+        }
+
+        self.output
+            .push_str(&format!("    jmp .L_WHILE_START_{}\n", id));
+        self.output.push_str(&format!(".L_WHILE_END_{}:\n", id));
+    }
+
+    fn generate_switch_stmt(
+        &mut self,
+        cond: &Expr,
+        cases: &[(i64, String)],
+        body: &[Stmt],
+        locals: &HashMap<String, i64>,
+        globals: &HashMap<String, String>,
+    ) {
+        self.generate_expression(cond, locals, globals);
+        self.output.push_str("    pop rax\n");
+
+        for (val, label_name) in cases {
+            self.output.push_str(&format!("    cmp rax, {}\n", val));
+            self.output.push_str(&format!(
+                "    je .L{}_{}\n",
+                self.current_func_name, label_name
+            ));
+        }
+
+        for stmt in body {
+            self.generate_statement(stmt, locals, globals);
+        }
+    }
+
+    fn generate_expr_stmt(
+        &mut self,
+        expr: &Expr,
+        locals: &HashMap<String, i64>,
+        globals: &HashMap<String, String>,
+    ) {
+        self.generate_expression(expr, locals, globals);
+        self.output.push_str("    pop rax\n");
+    }
+
     fn generate_statement(
         &mut self,
         stmt: &Stmt,
@@ -78,107 +222,242 @@ impl Codegen {
         globals: &HashMap<String, String>,
     ) {
         match stmt {
-            Stmt::Return(expr) => {
-                self.generate_expression(expr, locals, globals);
-
-                self.output.push_str("    pop rax\n");
-                self.output.push_str("    mov rsp, rbp\n");
-                self.output.push_str("    pop rbp\n");
-                self.output.push_str("    ret\n");
-            }
-            Stmt::Assignment(name, expr) => {
-                self.generate_expression(expr, locals, globals);
-
-                self.output.push_str("    pop rax\n");
-
-                if let Some(offset) = locals.get(name) {
-                    self.output
-                        .push_str(&format!("    mov [rbp + {}], rax\n", offset));
-                } else if let Some(label) = globals.get(name) {
-                    self.output
-                        .push_str(&format!("    mov [rip + {}], rax\n", label));
-                } else {
-                    panic!("Undefined variable: {}", name);
-                }
-            }
-            Stmt::Declaration(_names) => {}
-            Stmt::Label(name) => {
-                self.output
-                    .push_str(&format!(".L{}_{}:\n", self.current_func_name, name));
-            }
-            Stmt::Goto(name) => {
-                self.output
-                    .push_str(&format!("    jmp .L{}_{}\n", self.current_func_name, name));
-            }
+            Stmt::Return(expr) => self.generate_return_stmt(expr, locals, globals),
+            Stmt::Assignment(name, expr) => self.generate_assignment_stmt(name, expr, locals, globals),
+            Stmt::Declaration => self.generate_declaration_stmt(),
+            Stmt::Label(name) => self.generate_label_stmt(name),
+            Stmt::Goto(name) => self.generate_goto_stmt(name),
             Stmt::If {
                 cond,
                 then_body,
                 else_body,
-            } => {
-                let id = self.new_label();
-
-                self.generate_expression(cond, locals, globals);
-                self.output.push_str("    pop rax\n");
-                self.output.push_str("    cmp rax, 0\n");
-
-                if let Some(else_stmts) = else_body {
-                    self.output.push_str(&format!("    je .L_ELSE_{}\n", id));
-                    for stmt in then_body {
-                        self.generate_statement(&stmt, locals, globals);
-                    }
-                    self.output.push_str(&format!("    jmp .L_END_{}\n", id));
-
-                    self.output.push_str(&format!(".L_ELSE_{}:\n", id));
-                    for stmt in else_stmts {
-                        self.generate_statement(&stmt, locals, globals);
-                    }
-                    self.output.push_str(&format!(".L_END_{}:\n", id));
-                } else {
-                    self.output.push_str(&format!("    je .L_END_{}\n", id));
-                    for stmt in then_body {
-                        self.generate_statement(&stmt, locals, globals);
-                    }
-                    self.output.push_str(&format!(".L_END_{}:\n", id));
-                }
-            }
-            Stmt::While { cond, body } => {
-                let id = self.new_label();
-
-                self.output.push_str(&format!(".L_WHILE_START_{}:\n", id));
-
-                self.generate_expression(cond, locals, globals);
-                self.output.push_str("    pop rax\n");
-                self.output.push_str("    cmp rax, 0\n");
-
-                self.output
-                    .push_str(&format!("    je .L_WHILE_END_{}\n", id));
-
-                for stmt in body {
-                    self.generate_statement(&stmt, locals, globals);
-                }
-
-                self.output
-                    .push_str(&format!("    jmp .L_WHILE_START_{}\n", id));
-                self.output.push_str(&format!(".L_WHILE_END_{}:\n", id));
-            }
-            Stmt::Switch { id: _, cond, cases, body } => {
-                self.generate_expression(cond, locals, globals);
-                self.output.push_str("    pop rax\n");
-
-                for (val, label_name) in cases {
-                    self.output.push_str(&format!("    cmp rax, {}\n", val));
-                    self.output.push_str(&format!("    je .L{}_{}\n", self.current_func_name, label_name));
-                }
-
-                for stmt in body {
-                    self.generate_statement(stmt, locals, globals);
-                }
-            }
-            Stmt::Expr(expr) => {
-                self.generate_expression(expr, locals, globals);
-                self.output.push_str("    pop rax\n");
-            }
+            } => self.generate_if_stmt(cond, then_body, else_body, locals, globals),
+            Stmt::While { cond, body } => self.generate_while_stmt(cond, body, locals, globals),
+            Stmt::Switch { cond, cases, body } => self.generate_switch_stmt(cond, cases, body, locals, globals),
+            Stmt::Expr(expr) => self.generate_expr_stmt(expr, locals, globals),
         }
+    }
+
+    fn generate_integer_expr(&mut self, val: i64) {
+        self.output.push_str(&format!("    mov rax, {}\n", val));
+        self.output.push_str("    push rax\n");
+    }
+
+    fn generate_identifier_expr(
+        &mut self,
+        name: &str,
+        locals: &HashMap<String, i64>,
+        globals: &HashMap<String, String>,
+    ) {
+        if let Some(offset) = locals.get(name) {
+            self.output
+                .push_str(&format!("    mov rax, [rbp + {}]\n", offset));
+        } else if let Some(label) = globals.get(name) {
+            self.output
+                .push_str(&format!("    mov rax, [rip + {}]\n", label));
+        } else {
+            panic!("Undefined variable: {}", name);
+        }
+        self.output.push_str("    push rax\n");
+    }
+
+    fn generate_binary_op(&mut self, op: &Token) {
+        match op {
+            Token::Plus => {
+                self.output.push_str("    add rax, rdi\n");
+            }
+            Token::Minus => {
+                self.output.push_str("    sub rax, rdi\n");
+            }
+            Token::Star => {
+                self.output.push_str("    imul rax, rdi\n");
+            }
+            Token::Slash => {
+                self.output.push_str("    cqo\n");
+                self.output.push_str("    idiv rdi\n");
+            }
+            Token::Percent => {
+                self.output.push_str("    cqo\n");
+                self.output.push_str("    idiv rdi\n");
+                self.output.push_str("    mov rax, rdx\n");
+            }
+            Token::Equal => {
+                self.output.push_str("    cmp rax, rdi\n");
+                self.output.push_str("    sete al\n");
+                self.output.push_str("    movzx rax, al\n");
+            }
+            Token::NotEqual => {
+                self.output.push_str("    cmp rax, rdi\n");
+                self.output.push_str("    setne al\n");
+                self.output.push_str("    movzx rax, al\n");
+            }
+            Token::LessThan => {
+                self.output.push_str("    cmp rax, rdi\n");
+                self.output.push_str("    setl al\n");
+                self.output.push_str("    movzx rax, al\n");
+            }
+            Token::LessEqual => {
+                self.output.push_str("    cmp rax, rdi\n");
+                self.output.push_str("    setle al\n");
+                self.output.push_str("    movzx rax, al\n");
+            }
+            Token::GreaterThan => {
+                self.output.push_str("    cmp rax, rdi\n");
+                self.output.push_str("    setg al\n");
+                self.output.push_str("    movzx rax, al\n");
+            }
+            Token::GreaterEqual => {
+                self.output.push_str("    cmp rax, rdi\n");
+                self.output.push_str("    setge al\n");
+                self.output.push_str("    movzx rax, al\n");
+            }
+            Token::BitAnd => {
+                self.output.push_str("    and rax, rdi\n");
+            }
+            Token::BitOr => {
+                self.output.push_str("    or rax, rdi\n");
+            }
+            Token::LShift => {
+                self.output.push_str("    mov rcx, rdi\n");
+                self.output.push_str("    shl rax, cl\n");
+            }
+            Token::RShift => {
+                self.output.push_str("    mov rcx, rdi\n");
+                self.output.push_str("    sar rax, cl\n");
+            }
+            _ => panic!("Unsupported operator: {:?}", op),
+        }
+    }
+
+    fn generate_binary_expr(
+        &mut self,
+        left: &Expr,
+        right: &Expr,
+        op: &Token,
+        locals: &HashMap<String, i64>,
+        globals: &HashMap<String, String>,
+    ) {
+        self.generate_expression(left, locals, globals);
+        self.generate_expression(right, locals, globals);
+
+        self.output.push_str("    pop rdi\n");
+        self.output.push_str("    pop rax\n");
+
+        self.generate_binary_op(op);
+        self.output.push_str("    push rax\n");
+    }
+
+    fn generate_unary_not_expr(
+        &mut self,
+        expr: &Expr,
+        locals: &HashMap<String, i64>,
+        globals: &HashMap<String, String>,
+    ) {
+        self.generate_expression(expr, locals, globals);
+        self.output.push_str("    pop rax\n");
+        self.output.push_str("    cmp rax, 0\n");
+        self.output.push_str("    sete al\n");
+        self.output.push_str("    movzx rax, al\n");
+        self.output.push_str("    push rax\n");
+    }
+
+    fn generate_unary_minus_expr(
+        &mut self,
+        expr: &Expr,
+        locals: &HashMap<String, i64>,
+        globals: &HashMap<String, String>,
+    ) {
+        self.generate_expression(expr, locals, globals);
+        self.output.push_str("    pop rax\n");
+        self.output.push_str("    neg rax\n");
+        self.output.push_str("    push rax\n");
+    }
+
+    fn generate_unary_expr(
+        &mut self,
+        op: &Token,
+        expr: &Expr,
+        locals: &HashMap<String, i64>,
+        globals: &HashMap<String, String>,
+    ) {
+        match op {
+            Token::Not => self.generate_unary_not_expr(expr, locals, globals),
+            Token::Minus => self.generate_unary_minus_expr(expr, locals, globals),
+            _ => panic!("Unsupported unary operator: {:?}", op),
+        }
+    }
+
+    fn generate_prefix_expr(
+        &mut self,
+        op: &Token,
+        name: &str,
+        locals: &HashMap<String, i64>,
+        globals: &HashMap<String, String>,
+    ) {
+        self.generate_expression(&Expr::Identifier(name.to_string()), locals, globals);
+        self.output.push_str("    pop rax\n");
+        if *op == Token::Increment {
+            self.output.push_str("    add rax, 1\n");
+        } else {
+            self.output.push_str("    sub rax, 1\n");
+        }
+        self.output.push_str("    push rax\n");
+        if let Some(offset) = locals.get(name) {
+            self.output
+                .push_str(&format!("    mov [rbp + {}], rax\n", offset));
+        } else if let Some(label) = globals.get(name) {
+            self.output
+                .push_str(&format!("    mov [rip + {}], rax\n", label));
+        } else {
+            panic!("Undefined variable: {}", name);
+        }
+    }
+
+    fn generate_postfix_expr(
+        &mut self,
+        op: &Token,
+        name: &str,
+        locals: &HashMap<String, i64>,
+        globals: &HashMap<String, String>,
+    ) {
+        self.generate_expression(&Expr::Identifier(name.to_string()), locals, globals);
+        self.output.push_str("    pop rax\n");
+        self.output.push_str("    push rax\n");
+        if *op == Token::Increment {
+            self.output.push_str("    add rax, 1\n");
+        } else {
+            self.output.push_str("    sub rax, 1\n");
+        }
+        if let Some(offset) = locals.get(name) {
+            self.output
+                .push_str(&format!("    mov [rbp + {}], rax\n", offset));
+        } else if let Some(label) = globals.get(name) {
+            self.output
+                .push_str(&format!("    mov [rip + {}], rax\n", label));
+        } else {
+            panic!("Undefined variable: {}", name);
+        }
+    }
+
+    fn generate_call_expr(
+        &mut self,
+        name: &str,
+        args: &[Expr],
+        locals: &HashMap<String, i64>,
+        globals: &HashMap<String, String>,
+    ) {
+        for arg in args {
+            self.generate_expression(arg, locals, globals);
+        }
+        let arg_regs = ["rdi", "rsi", "rdx", "rcx", "r8", "r9"];
+
+        let reg_args = std::cmp::min(args.len(), 6);
+        for i in (0..reg_args).rev() {
+            self.output.push_str(&format!("    pop {}\n", arg_regs[i]));
+        }
+
+        self.output.push_str(&format!("    call {}\n", name));
+        self.output.push_str("    push rax\n");
     }
 
     fn generate_expression(
@@ -188,166 +467,15 @@ impl Codegen {
         globals: &HashMap<String, String>,
     ) {
         match expr {
-            Expr::Integer(val) => {
-                self.output.push_str(&format!("    mov rax, {}\n", val));
-                self.output.push_str("    push rax\n");
-            }
-            Expr::Identifier(name) => {
-                if let Some(offset) = locals.get(name) {
-                    self.output
-                        .push_str(&format!("    mov rax, [rbp + {}]\n", offset));
-                } else if let Some(label) = globals.get(name) {
-                    self.output
-                        .push_str(&format!("    mov rax, [rip + {}]\n", label));
-                } else {
-                    panic!("Undefined variable: {}", name);
-                }
-                self.output.push_str("    push rax\n");
-            }
+            Expr::Integer(val) => self.generate_integer_expr(*val),
+            Expr::Identifier(name) => self.generate_identifier_expr(name, locals, globals),
             Expr::Binary { op, left, right } => {
-                self.generate_expression(left, locals, globals);
-                self.generate_expression(right, locals, globals);
-
-                self.output.push_str("    pop rdi\n");
-                self.output.push_str("    pop rax\n");
-
-                match op {
-                    Token::Plus => {
-                        self.output.push_str("    add rax, rdi\n");
-                    }
-                    Token::Minus => {
-                        self.output.push_str("    sub rax, rdi\n");
-                    }
-                    Token::Star => {
-                        self.output.push_str("    imul rax, rdi\n");
-                    }
-                    Token::Slash => {
-                        self.output.push_str("    cqo\n");
-                        self.output.push_str("    idiv rdi\n");
-                    }
-                    Token::Percent => {
-                        self.output.push_str("    cqo\n");
-                        self.output.push_str("    idiv rdi\n");
-                        self.output.push_str("    mov rax, rdx\n");
-                    }
-                    Token::Equal => {
-                        self.output.push_str("    cmp rax, rdi\n");
-                        self.output.push_str("    sete al\n");
-                        self.output.push_str("    movzx rax, al\n");
-                    }
-                    Token::NotEqual => {
-                        self.output.push_str("    cmp rax, rdi\n");
-                        self.output.push_str("    setne al\n");
-                        self.output.push_str("    movzx rax, al\n");
-                    }
-                    Token::LessThan => {
-                        self.output.push_str("    cmp rax, rdi\n");
-                        self.output.push_str("    setl al\n");
-                        self.output.push_str("    movzx rax, al\n");
-                    }
-                    Token::LessEqual => {
-                        self.output.push_str("    cmp rax, rdi\n");
-                        self.output.push_str("    setle al\n");
-                        self.output.push_str("    movzx rax, al\n");
-                    }
-                    Token::GreaterThan => {
-                        self.output.push_str("    cmp rax, rdi\n");
-                        self.output.push_str("    setg al\n");
-                        self.output.push_str("    movzx rax, al\n");
-                    }
-                    Token::GreaterEqual => {
-                        self.output.push_str("    cmp rax, rdi\n");
-                        self.output.push_str("    setge al\n");
-                        self.output.push_str("    movzx rax, al\n");
-                    }
-                    Token::BitAnd => {
-                        self.output.push_str("    and rax, rdi\n");
-                    }
-                    Token::BitOr => {
-                        self.output.push_str("    or rax, rdi\n");
-                    }
-                    Token::LShift => {
-                        self.output.push_str("    mov rcx, rdi\n");
-                        self.output.push_str("    shl rax, cl\n");
-                    }
-                    Token::RShift => {
-                        self.output.push_str("    mov rcx, rdi\n");
-                        self.output.push_str("    sar rax, cl\n");
-                    }
-                    _ => panic!("Unsupported operator: {:?}", op),
-                }
-                self.output.push_str("    push rax\n");
+                self.generate_binary_expr(left, right, op, locals, globals)
             }
-            Expr::Unary { op, expr } => match op {
-                Token::Not => {
-                    self.generate_expression(expr, locals, globals);
-                    self.output.push_str("    pop rax\n");
-                    self.output.push_str("    cmp rax, 0\n");
-                    self.output.push_str("    sete al\n");
-                    self.output.push_str("    movzx rax, al\n");
-                    self.output.push_str("    push rax\n");
-                }
-                Token::Minus => {
-                    self.generate_expression(expr, locals, globals);
-                    self.output.push_str("    pop rax\n");
-                    self.output.push_str("    neg rax\n");
-                    self.output.push_str("    push rax\n");
-                }
-                _ => panic!("Unsupported unary operator: {:?}", op),
-            },
-            Expr::Prefix { op, name } => {
-                self.generate_expression(&Expr::Identifier(name.clone()), locals, globals);
-                if *op == Token::Increment {
-                    self.output.push_str("    pop rax\n");
-                    self.output.push_str("    add rax, 1\n");
-                } else {
-                    self.output.push_str("    pop rax\n");
-                    self.output.push_str("    sub rax, 1\n");
-                }
-                self.output.push_str("    push rax\n");
-                if let Some(offset) = locals.get(name) {
-                    self.output
-                        .push_str(&format!("    mov [rbp + {}], rax\n", offset));
-                } else if let Some(label) = globals.get(name) {
-                    self.output
-                        .push_str(&format!("    mov [rip + {}], rax\n", label));
-                } else {
-                    panic!("Undefined variable: {}", name);
-                }
-            }
-            Expr::Postfix { op, name } => {
-                self.generate_expression(&Expr::Identifier(name.clone()), locals, globals);
-                self.output.push_str("    pop rax\n");
-                self.output.push_str("    push rax\n");
-                if *op == Token::Increment {
-                    self.output.push_str("    add rax, 1\n");
-                } else {
-                    self.output.push_str("    sub rax, 1\n");
-                }
-                if let Some(offset) = locals.get(name) {
-                    self.output
-                        .push_str(&format!("    mov [rbp + {}], rax\n", offset));
-                } else if let Some(label) = globals.get(name) {
-                    self.output
-                        .push_str(&format!("    mov [rip + {}], rax\n", label));
-                } else {
-                    panic!("Undefined variable: {}", name);
-                }
-            }
-            Expr::Call { name, args } => {
-                for arg in args {
-                    self.generate_expression(arg, locals, globals);
-                }
-                let arg_regs = ["rdi", "rsi", "rdx", "rcx", "r8", "r9"];
-
-                let reg_args = std::cmp::min(args.len(), 6);
-                for i in (0..reg_args).rev() {
-                    self.output.push_str(&format!("    pop {}\n", arg_regs[i]));
-                }
-
-                self.output.push_str(&format!("    call {}\n", name));
-                self.output.push_str("    push rax\n");
-            }
+            Expr::Unary { op, expr } => self.generate_unary_expr(op, expr, locals, globals),
+            Expr::Prefix { op, name } => self.generate_prefix_expr(op, name, locals, globals),
+            Expr::Postfix { op, name } => self.generate_postfix_expr(op, name, locals, globals),
+            Expr::Call { name, args } => self.generate_call_expr(name, args, locals, globals),
         }
     }
 }

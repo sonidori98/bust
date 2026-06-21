@@ -30,7 +30,7 @@ pub enum Expr {
 #[derive(Debug, Clone)]
 pub enum Stmt {
     Return(Expr),
-    Declaration(Vec<String>),
+    Declaration,
     Assignment(String, Expr),
     Label(String),
     Goto(String),
@@ -44,7 +44,6 @@ pub enum Stmt {
         body: Vec<Stmt>,
     },
     Switch {
-        id: usize,
         cond: Expr,
         cases: Vec<(i64, String)>,
         body: Vec<Stmt>,
