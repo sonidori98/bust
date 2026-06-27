@@ -3,7 +3,7 @@ use std::iter::Peekable;
 use std::vec::IntoIter;
 
 use crate::{
-    ast::{Expr, Function, Program, Stmt},
+    ast::{Expr, Function, GlobalArray, Program, Stmt},
     token::Token,
 };
 
@@ -13,6 +13,7 @@ pub struct Parser {
     arrays: HashSet<String>,
     global_vars: HashMap<String, String>,
     global_inits: HashMap<String, i64>,
+    global_arrays: HashMap<String, GlobalArray>,
     switch_count: usize,
     next_offset: i64,
 }
@@ -25,6 +26,7 @@ impl Parser {
             arrays: HashSet::new(),
             global_vars: HashMap::new(),
             global_inits: HashMap::new(),
+            global_arrays: HashMap::new(),
             switch_count: 0,
             next_offset: -8,
         }
@@ -112,23 +114,62 @@ impl Parser {
         }
         let globals = std::mem::take(&mut self.global_vars);
         let global_inits = std::mem::take(&mut self.global_inits);
+        let global_arrays = std::mem::take(&mut self.global_arrays);
         Program {
             functions,
             globals,
             global_inits,
+            global_arrays,
         }
     }
 
     fn parse_global_decl_with_name(&mut self, name: String) {
         let label = format!(".{}", name);
-        self.global_vars.insert(name.clone(), label);
-        let expr = self.parse_expression();
-        let val = match expr {
-            Expr::Integer(n) => n,
-            _ => panic!("Expected integer constant"),
-        };
-        self.global_inits.insert(name, val);
-        self.consume(Token::Semicolon);
+
+        if *self.peek_token() == Token::LBracket {
+            self.consume(Token::LBracket);
+            let size = match self.next_token() {
+                Token::Integer(n) => n,
+                _ => panic!("Expected array size"),
+            };
+            self.consume(Token::RBracket);
+
+            let mut init_values = Vec::new();
+            if *self.peek_token() != Token::Semicolon {
+                loop {
+                    let expr = self.parse_expression();
+                    match expr {
+                        Expr::Integer(n) => init_values.push(n),
+                        _ => panic!("Expected integer constant in array initializer"),
+                    }
+                    if *self.peek_token() == Token::Comma {
+                        self.consume(Token::Comma);
+                    } else {
+                        break;
+                    }
+                }
+            }
+            self.consume(Token::Semicolon);
+
+            self.global_vars.insert(name.clone(), label.clone());
+            self.global_arrays.insert(
+                name,
+                GlobalArray {
+                    label,
+                    size,
+                    init_values,
+                },
+            );
+        } else {
+            self.global_vars.insert(name.clone(), label);
+            let expr = self.parse_expression();
+            let val = match expr {
+                Expr::Integer(n) => n,
+                _ => panic!("Expected integer constant"),
+            };
+            self.global_inits.insert(name, val);
+            self.consume(Token::Semicolon);
+        }
     }
 
     fn parse_function_with_name(&mut self, name: String) -> Function {

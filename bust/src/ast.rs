@@ -74,8 +74,16 @@ pub struct Function {
 }
 
 #[derive(Debug, Clone)]
+pub struct GlobalArray {
+    pub label: String,
+    pub size: i64,
+    pub init_values: Vec<i64>,
+}
+
+#[derive(Debug, Clone)]
 pub struct Program {
     pub functions: Vec<Function>,
     pub globals: std::collections::HashMap<String, String>,
     pub global_inits: std::collections::HashMap<String, i64>,
+    pub global_arrays: std::collections::HashMap<String, GlobalArray>,
 }

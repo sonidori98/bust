@@ -9,6 +9,7 @@ pub struct Codegen {
     output: String,
     current_func_name: String,
     current_func_arrays: HashSet<String>,
+    global_array_names: HashSet<String>,
     label_count: usize,
     strings: Vec<Vec<u8>>,
 }
@@ -19,6 +20,7 @@ impl Codegen {
             output: String::new(),
             current_func_name: String::new(),
             current_func_arrays: HashSet::new(),
+            global_array_names: HashSet::new(),
             label_count: 0,
             strings: Vec::new(),
         }
@@ -36,6 +38,9 @@ impl Codegen {
 
         let mut has_data = false;
         for (name, label) in &program.globals {
+            if program.global_arrays.contains_key(name) {
+                continue;
+            }
             if let Some(init_val) = program.global_inits.get(name) {
                 if !has_data {
                     self.output.push_str(".data\n");
@@ -47,6 +52,33 @@ impl Codegen {
                 self.output.push_str(&format!(".comm {}, 8, 8\n", label));
             }
         }
+
+        for (_name, arr) in &program.global_arrays {
+            if !arr.init_values.is_empty() {
+                if !has_data {
+                    self.output.push_str(".data\n");
+                    has_data = true;
+                }
+                self.output.push_str(&format!("{}:\n", arr.label));
+                for val in &arr.init_values {
+                    self.output.push_str(&format!("    .quad {}\n", val));
+                }
+                let remaining = arr.size as usize - arr.init_values.len();
+                for _ in 0..remaining {
+                    self.output.push_str("    .quad 0\n");
+                }
+            } else {
+                let bytes = arr.size * 8;
+                self.output
+                    .push_str(&format!(".comm {}, {}, 8\n", arr.label, bytes));
+            }
+        }
+
+        self.global_array_names = program
+            .global_arrays
+            .keys()
+            .cloned()
+            .collect();
 
         self.output.push_str(".text\n");
 
@@ -315,8 +347,13 @@ impl Codegen {
                     .push_str(&format!("    mov rax, [rbp + {}]\n", offset));
             }
         } else if let Some(label) = globals.get(name) {
-            self.output
-                .push_str(&format!("    mov rax, [rip + {}]\n", label));
+            if self.global_array_names.contains(name) {
+                self.output
+                    .push_str(&format!("    lea rax, [rip + {}]\n", label));
+            } else {
+                self.output
+                    .push_str(&format!("    mov rax, [rip + {}]\n", label));
+            }
         } else {
             panic!("Undefined variable: {}", name);
         }
