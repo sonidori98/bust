@@ -446,17 +446,29 @@ impl Codegen {
         locals: &HashMap<String, i64>,
         globals: &HashMap<String, String>,
     ) {
-        for arg in args {
-            self.generate_expression(arg, locals, globals);
-        }
         let arg_regs = ["rdi", "rsi", "rdx", "rcx", "r8", "r9"];
+        let reg_count = std::cmp::min(args.len(), 6);
+        let stack_count = args.len().saturating_sub(6);
 
-        let reg_args = std::cmp::min(args.len(), 6);
-        for i in (0..reg_args).rev() {
+        for i in (6..args.len()).rev() {
+            self.generate_expression(&args[i], locals, globals);
+        }
+
+        for i in 0..reg_count {
+            self.generate_expression(&args[i], locals, globals);
+        }
+
+        for i in (0..reg_count).rev() {
             self.output.push_str(&format!("    pop {}\n", arg_regs[i]));
         }
 
         self.output.push_str(&format!("    call {}\n", name));
+
+        if stack_count > 0 {
+            self.output
+                .push_str(&format!("    add rsp, {}\n", stack_count * 8));
+        }
+
         self.output.push_str("    push rax\n");
     }
 
