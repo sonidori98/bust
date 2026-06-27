@@ -143,7 +143,11 @@ impl Parser {
 
     fn parse_return_stmt(&mut self) -> Stmt {
         self.consume(Token::Return);
-        let expr = self.parse_expression();
+        let expr = if *self.peek_token() == Token::Semicolon {
+            Expr::Integer(0)
+        } else {
+            self.parse_expression()
+        };
         self.consume(Token::Semicolon);
         Stmt::Return(expr)
     }
@@ -700,6 +704,26 @@ mod tests {
                 }
             } else {
                 panic!("Expected Expr::Binary(+)");
+            }
+        } else {
+            panic!("Expected Stmt::Return");
+        }
+    }
+
+    #[test]
+    fn test_parser_bare_return() {
+        let input = "main() { return; }";
+        let mut lexer = Lexer::new(input);
+        let tokens = lexer.tokenize();
+        let mut parser = Parser::new(tokens);
+        let cr = parser.parse_program();
+        let func = &cr.functions[0];
+        assert_eq!(func.body.len(), 1);
+        if let Stmt::Return(expr) = &func.body[0] {
+            if let Expr::Integer(val) = expr {
+                assert_eq!(*val, 0);
+            } else {
+                panic!("Expected Expr::Integer(0)");
             }
         } else {
             panic!("Expected Stmt::Return");

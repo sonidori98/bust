@@ -1063,6 +1063,17 @@ main:
     }
 
     #[test]
+    fn test_codegen_bare_return() {
+        let input = "main() { return; }";
+        let mut lexer = Lexer::new(input);
+        let mut parser = Parser::new(lexer.tokenize());
+        let cr = parser.parse_program();
+        let code = Codegen::new().generate(&cr);
+
+        assert!(code.contains("mov rax, 0"));
+    }
+
+    #[test]
     fn test_codegen_string_literal_empty() {
         let input = "main() { return \"\"; }";
         let mut lexer = Lexer::new(input);
