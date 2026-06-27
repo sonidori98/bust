@@ -1,7 +1,7 @@
 use libc::{
-    SYS_chdir, SYS_chmod, SYS_exit, SYS_fork, SYS_fstat, SYS_getuid, SYS_link, SYS_lseek,
-    SYS_mkdir, SYS_open, SYS_read, SYS_setuid, SYS_stat, SYS_unlink, SYS_wait4, SYS_write, size_t,
-    syscall,
+    SYS_chdir, SYS_chmod, SYS_chown, SYS_close, SYS_creat, SYS_execve, SYS_exit, SYS_fork,
+    SYS_fstat, SYS_getuid, SYS_link, SYS_lseek, SYS_mkdir, SYS_open, SYS_read, SYS_setuid,
+    SYS_stat, SYS_time, SYS_unlink, SYS_wait4, SYS_write, size_t, syscall,
 };
 use std::{arch::naked_asm, ffi::c_void, os::fd::RawFd};
 
@@ -18,8 +18,23 @@ pub extern "sysv64" fn chdir(string: i64) -> i64 {
 }
 
 #[unsafe(no_mangle)]
-pub extern "sysv64" fn chmode(string: i64, mode: i64) -> i64 {
+pub extern "sysv64" fn chmod(string: i64, mode: i64) -> i64 {
     unsafe { syscall(SYS_chmod, string, mode) }
+}
+
+#[unsafe(no_mangle)]
+pub extern "sysv64" fn chown(string: i64, owner: i64) -> i64 {
+    unsafe { syscall(SYS_chown, string, owner) }
+}
+
+#[unsafe(no_mangle)]
+pub extern "sysv64" fn close(file: i64) -> i64 {
+    unsafe { syscall(SYS_close, file) }
+}
+
+#[unsafe(no_mangle)]
+pub extern "sysv64" fn creat(string: i64, mode: i64) -> i64 {
+    unsafe { syscall(SYS_creat, string, mode) }
 }
 
 #[unsafe(no_mangle)]
@@ -303,6 +318,24 @@ pub extern "sysv64" fn execl() {
 }
 
 #[unsafe(no_mangle)]
+pub extern "sysv64" fn execv(string: i64, argv: i64, count: i64) {
+    let mut args: Vec<i64> = Vec::with_capacity(count as usize + 1);
+    for i in 0..count {
+        args.push(unsafe { *(argv as *const i64).offset(i as isize) });
+    }
+    args.push(0);
+    let envp: i64 = 0;
+    unsafe {
+        syscall(
+            SYS_execve,
+            string,
+            args.as_ptr() as i64,
+            &envp as *const i64 as i64,
+        );
+    }
+}
+
+#[unsafe(no_mangle)]
 pub extern "sysv64" fn exit() {
     unsafe {
         syscall(SYS_exit, 0);
@@ -321,8 +354,8 @@ pub extern "sysv64" fn fstat(file: i64, status: i64) -> i64 {
 
 #[unsafe(no_mangle)]
 pub extern "sysv64" fn getchar() -> i64 {
-    let mut c = ' ';
-    if unsafe { syscall(SYS_read, 1, &mut c, 1) != 1 } {
+    let mut c: u8 = 0;
+    if unsafe { syscall(SYS_read, 0 as RawFd, &mut c as *mut u8 as *mut c_void, 1) != 1 } {
         return 0;
     }
     c as i64
@@ -334,7 +367,7 @@ pub extern "sysv64" fn getuid() -> i64 {
 }
 
 #[unsafe(no_mangle)]
-pub extern "sysv64" fn gtty(file: i64, ttystat: i64) -> i64 {
+pub extern "sysv64" fn gtty(_file: i64, _ttystat: i64) -> i64 {
     todo!()
 }
 
@@ -384,13 +417,16 @@ pub extern "sysv64" fn stat(string: i64, status: i64) -> i64 {
 }
 
 #[unsafe(no_mangle)]
-pub extern "sysv64" fn stty(file: i64, ttystat: i64) -> i64 {
+pub extern "sysv64" fn stty(_file: i64, _ttystat: i64) -> i64 {
     todo!()
 }
 
 #[unsafe(no_mangle)]
 pub extern "sysv64" fn time(timev: i64) {
-    todo!()
+    let tv = unsafe { syscall(SYS_time, std::ptr::null::<i64>()) };
+    unsafe {
+        *(timev as *mut i64) = tv;
+    }
 }
 
 #[unsafe(no_mangle)]
