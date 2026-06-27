@@ -193,7 +193,7 @@ impl Parser {
         self.consume(Token::LBrace);
         let mut body = Vec::new();
         while *self.peek_token() != Token::RBrace {
-            body.push(self.parse_statement());
+            body.extend(self.parse_statement());
         }
         self.consume(Token::RBrace);
 
@@ -219,8 +219,9 @@ impl Parser {
         Stmt::Return(expr)
     }
 
-    fn parse_auto_stmt(&mut self) -> Stmt {
+    fn parse_auto_stmt(&mut self) -> Vec<Stmt> {
         self.consume(Token::Auto);
+        let mut stmts = Vec::new();
         loop {
             while *self.peek_token() == Token::Star {
                 self.next_token();
@@ -239,7 +240,14 @@ impl Parser {
                     self.arrays.insert(name);
                 } else {
                     self.next_offset -= 8;
-                    self.vars.insert(name, self.next_offset);
+                    self.vars.insert(name.clone(), self.next_offset);
+
+                if *self.peek_token() != Token::Comma
+                    && *self.peek_token() != Token::Semicolon
+                {
+                    let expr = self.parse_expression();
+                    stmts.push(Stmt::Assignment(name, expr));
+                }
                 }
 
                 if *self.peek_token() == Token::Comma {
@@ -250,7 +258,11 @@ impl Parser {
             break;
         }
         self.consume(Token::Semicolon);
-        Stmt::Declaration
+        if stmts.is_empty() {
+            vec![Stmt::Declaration]
+        } else {
+            stmts
+        }
     }
 
     fn parse_goto_stmt(&mut self) -> Stmt {
@@ -360,12 +372,12 @@ impl Parser {
         if *self.peek_token() == Token::LBrace {
             self.consume(Token::LBrace);
             while *self.peek_token() != Token::RBrace {
-                then_body.push(self.parse_statement());
+                then_body.extend(self.parse_statement());
             }
             self.consume(Token::RBrace);
-        } else {
-            then_body.push(self.parse_statement());
-        }
+            } else {
+                then_body.extend(self.parse_statement());
+            }
         let mut else_body = None;
         if *self.peek_token() == Token::Else {
             self.consume(Token::Else);
@@ -373,11 +385,11 @@ impl Parser {
             if *self.peek_token() == Token::LBrace {
                 self.consume(Token::LBrace);
                 while *self.peek_token() != Token::RBrace {
-                    body.push(self.parse_statement());
+                    body.extend(self.parse_statement());
                 }
                 self.consume(Token::RBrace);
             } else {
-                body.push(self.parse_statement());
+                body.extend(self.parse_statement());
             }
             else_body = Some(body);
         }
@@ -430,11 +442,11 @@ impl Parser {
         if *self.peek_token() == Token::LBrace {
             self.consume(Token::LBrace);
             while *self.peek_token() != Token::RBrace {
-                body.push(self.parse_statement());
+                body.extend(self.parse_statement());
             }
             self.consume(Token::RBrace);
         } else {
-            body.push(self.parse_statement());
+            body.extend(self.parse_statement());
         }
 
         Stmt::While { cond, body }
@@ -464,7 +476,7 @@ impl Parser {
                 cases.push((val, label_name.clone()));
                 body.push(Stmt::Label(label_name));
             } else {
-                body.push(self.parse_statement());
+                body.extend(self.parse_statement());
             }
         }
         self.consume(Token::RBrace);
@@ -472,22 +484,22 @@ impl Parser {
         Stmt::Switch { cond, cases, body }
     }
 
-    fn parse_statement(&mut self) -> Stmt {
+    fn parse_statement(&mut self) -> Vec<Stmt> {
         let token = self.peek_token().clone();
         match token {
-            Token::Return => self.parse_return_stmt(),
+            Token::Return => vec![self.parse_return_stmt()],
             Token::Auto => self.parse_auto_stmt(),
-            Token::Goto => self.parse_goto_stmt(),
-            Token::Identifier(name) => self.parse_identifier_stmt(name),
-            Token::If => self.parse_if_stmt(),
-            Token::Increment => self.parse_prefix_inc_stmt(),
-            Token::Decrement => self.parse_prefix_dec_stmt(),
-            Token::While => self.parse_while_stmt(),
-            Token::Switch => self.parse_switch_stmt(),
+            Token::Goto => vec![self.parse_goto_stmt()],
+            Token::Identifier(name) => vec![self.parse_identifier_stmt(name)],
+            Token::If => vec![self.parse_if_stmt()],
+            Token::Increment => vec![self.parse_prefix_inc_stmt()],
+            Token::Decrement => vec![self.parse_prefix_dec_stmt()],
+            Token::While => vec![self.parse_while_stmt()],
+            Token::Switch => vec![self.parse_switch_stmt()],
             Token::Extrn => {
                 self.consume(Token::Extrn);
                 self.register_global();
-                Stmt::Declaration
+                vec![Stmt::Declaration]
             }
             _ => panic!("Unsupported statement: {:?}", token),
         }
