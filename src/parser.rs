@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::iter::Peekable;
 use std::vec::IntoIter;
 
@@ -10,7 +10,9 @@ use crate::{
 pub struct Parser {
     iter: Peekable<IntoIter<Token>>,
     vars: HashMap<String, i64>,
+    arrays: HashSet<String>,
     global_vars: HashMap<String, String>,
+    global_inits: HashMap<String, i64>,
     switch_count: usize,
     next_offset: i64,
 }
@@ -20,7 +22,9 @@ impl Parser {
         Self {
             iter: tokens.into_iter().peekable(),
             vars: HashMap::new(),
+            arrays: HashSet::new(),
             global_vars: HashMap::new(),
+            global_inits: HashMap::new(),
             switch_count: 0,
             next_offset: -8,
         }
@@ -86,30 +90,50 @@ impl Parser {
     pub fn parse_program(&mut self) -> Program {
         let mut functions = Vec::new();
         while *self.peek_token() != Token::Eof {
-            match self.peek_token() {
+            match self.peek_token().clone() {
                 Token::Extrn => {
                     self.consume(Token::Extrn);
                     self.register_global();
                 }
-                _ => {
-                    functions.push(self.parse_function());
+                Token::Main => {
+                    self.next_token();
+                    functions.push(self.parse_function_with_name("main".to_string()));
                 }
+                Token::Identifier(name) => {
+                    self.next_token();
+                    if *self.peek_token() == Token::LParen {
+                        functions.push(self.parse_function_with_name(name));
+                    } else {
+                        self.parse_global_decl_with_name(name);
+                    }
+                }
+                _ => panic!("Unexpected token at top level: {:?}", self.peek_token()),
             }
         }
         let globals = std::mem::take(&mut self.global_vars);
-        Program { functions, globals }
+        let global_inits = std::mem::take(&mut self.global_inits);
+        Program {
+            functions,
+            globals,
+            global_inits,
+        }
     }
 
-    // "func" "(" "arg" ")" "{" ... "}"
-    fn parse_function(&mut self) -> Function {
+    fn parse_global_decl_with_name(&mut self, name: String) {
+        let label = format!(".{}", name);
+        self.global_vars.insert(name.clone(), label);
+        let expr = self.parse_expression();
+        let val = match expr {
+            Expr::Integer(n) => n,
+            _ => panic!("Expected integer constant"),
+        };
+        self.global_inits.insert(name, val);
+        self.consume(Token::Semicolon);
+    }
+
+    fn parse_function_with_name(&mut self, name: String) -> Function {
         self.vars.clear();
         self.next_offset = -8;
-
-        let name = match self.next_token() {
-            Token::Main => "main".to_string(),
-            Token::Identifier(n) => n,
-            _ => panic!("Expected function name"),
-        };
 
         self.consume(Token::LParen);
         let mut params = Vec::new();
@@ -133,11 +157,13 @@ impl Parser {
         self.consume(Token::RBrace);
 
         let locals = std::mem::take(&mut self.vars);
+        let arrays = std::mem::take(&mut self.arrays);
         Function {
             name,
             params,
             body,
             locals,
+            arrays,
         }
     }
 
@@ -155,10 +181,25 @@ impl Parser {
     fn parse_auto_stmt(&mut self) -> Stmt {
         self.consume(Token::Auto);
         loop {
+            while *self.peek_token() == Token::Star {
+                self.next_token();
+            }
             if let Token::Identifier(name) = self.peek_token().clone() {
                 self.next_token();
-                self.next_offset -= 8;
-                self.vars.insert(name, self.next_offset);
+                if *self.peek_token() == Token::LBracket {
+                    self.consume(Token::LBracket);
+                    let size = match self.next_token() {
+                        Token::Integer(n) => n,
+                        _ => panic!("Expected array size"),
+                    };
+                    self.consume(Token::RBracket);
+                    self.next_offset -= 8 * size;
+                    self.vars.insert(name.clone(), self.next_offset);
+                    self.arrays.insert(name);
+                } else {
+                    self.next_offset -= 8;
+                    self.vars.insert(name, self.next_offset);
+                }
 
                 if *self.peek_token() == Token::Comma {
                     self.next_token();
@@ -184,6 +225,19 @@ impl Parser {
     fn parse_identifier_stmt(&mut self, name: String) -> Stmt {
         self.next_token();
         match self.peek_token() {
+            Token::LBracket => {
+                self.consume(Token::LBracket);
+                let index = self.parse_expression();
+                self.consume(Token::RBracket);
+                if *self.peek_token() == Token::Assign {
+                    self.consume(Token::Assign);
+                    let rhs = self.parse_expression();
+                    self.consume(Token::Semicolon);
+                    Stmt::AssignIndex(name, index, rhs)
+                } else {
+                    panic!("Expected '=' after array subscript");
+                }
+            }
             Token::Assign => {
                 self.consume(Token::Assign);
                 let expr = self.parse_expression();
@@ -389,6 +443,11 @@ impl Parser {
             Token::Decrement => self.parse_prefix_dec_stmt(),
             Token::While => self.parse_while_stmt(),
             Token::Switch => self.parse_switch_stmt(),
+            Token::Extrn => {
+                self.consume(Token::Extrn);
+                self.register_global();
+                Stmt::Declaration
+            }
             _ => panic!("Unsupported statement: {:?}", token),
         }
     }
@@ -569,8 +628,20 @@ impl Parser {
             Token::Minus => self.parse_unary_minus(),
             Token::Increment => self.parse_unary_increment(),
             Token::Decrement => self.parse_unary_decrement(),
+            Token::Star => self.parse_unary_deref(),
+            Token::BitAnd => self.parse_unary_addr(),
             _ => self.parse_primary(),
         }
+    }
+
+    fn parse_unary_deref(&mut self) -> Expr {
+        self.next_token();
+        Expr::Deref(Box::new(self.parse_unary()))
+    }
+
+    fn parse_unary_addr(&mut self) -> Expr {
+        self.next_token();
+        Expr::Addr(Box::new(self.parse_unary()))
     }
 
     fn parse_primary_integer(&mut self) -> Expr {
@@ -642,13 +713,28 @@ impl Parser {
 
     fn parse_primary(&mut self) -> Expr {
         let token = self.peek_token().clone();
-        match token {
+        let mut expr = match token {
             Token::Integer(_) => self.parse_primary_integer(),
             Token::StringLiteral(_) => self.parse_primary_string_literal(),
             Token::Identifier(name) => self.parse_primary_identifier(name),
             Token::LParen => self.parse_primary_paren(),
             _ => panic!("Expected expression, but got {:?}", token),
+        };
+        loop {
+            match self.peek_token() {
+                Token::LBracket => {
+                    self.consume(Token::LBracket);
+                    let index = self.parse_expression();
+                    self.consume(Token::RBracket);
+                    expr = Expr::Index {
+                        expr: Box::new(expr),
+                        index: Box::new(index),
+                    };
+                }
+                _ => break,
+            }
         }
+        expr
     }
 }
 
@@ -1248,8 +1334,6 @@ mod tests {
         }
     }
 
-    // --- Increment / Decrement tests ---
-
     fn body(index: usize, input: &str) -> Stmt {
         let mut lexer = Lexer::new(input);
         let mut parser = Parser::new(lexer.tokenize());
@@ -1516,5 +1600,69 @@ mod tests {
         let mut lexer = Lexer::new(input);
         let mut parser = Parser::new(lexer.tokenize());
         parser.parse_program();
+    }
+
+    fn parse_program(input: &str) -> crate::ast::Program {
+        let mut lexer = Lexer::new(input);
+        let mut parser = Parser::new(lexer.tokenize());
+        parser.parse_program()
+    }
+
+    #[test]
+    fn test_parser_array_declaration() {
+        let program = parse_program("main() { auto a[5]; }");
+        assert!(program.functions[0].arrays.contains("a"));
+        assert!(program.functions[0].locals.contains_key("a"));
+    }
+
+    #[test]
+    fn test_parser_array_index() {
+        let stmt = body(1, "main() { auto a[5]; return a[0]; }");
+        if let Stmt::Return(Expr::Index { expr, index }) = stmt {
+            assert!(matches!(*expr, Expr::Identifier(ref n) if n == "a"));
+            assert!(matches!(*index, Expr::Integer(0)));
+        } else {
+            panic!("Expected Stmt::Return(Expr::Index)");
+        }
+    }
+
+    #[test]
+    fn test_parser_array_assign() {
+        let stmt = body(1, "main() { auto a[5]; a[0] = 42; }");
+        if let Stmt::AssignIndex(name, index, rhs) = stmt {
+            assert_eq!(name, "a");
+            assert!(matches!(index, Expr::Integer(0)));
+            assert!(matches!(rhs, Expr::Integer(42)));
+        } else {
+            panic!("Expected Stmt::AssignIndex");
+        }
+    }
+
+    #[test]
+    fn test_parser_pointer_deref() {
+        let stmt = body(2, "main() { auto x; auto *p; return *p; }");
+        if let Stmt::Return(Expr::Deref(expr)) = stmt {
+            assert!(matches!(*expr, Expr::Identifier(ref n) if n == "p"));
+        } else {
+            panic!("Expected Stmt::Return(Expr::Deref)");
+        }
+    }
+
+    #[test]
+    fn test_parser_addr_of() {
+        let stmt = body(2, "main() { auto x; auto *p; p = &x; }");
+        if let Stmt::Assignment(name, Expr::Addr(expr)) = stmt {
+            assert_eq!(name, "p");
+            assert!(matches!(*expr, Expr::Identifier(ref n) if n == "x"));
+        } else {
+            panic!("Expected Stmt::Assignment(Addr)");
+        }
+    }
+
+    #[test]
+    fn test_parser_pointer_decl() {
+        let program = parse_program("main() { auto *p; auto **q; }");
+        assert!(program.functions[0].locals.contains_key("p"));
+        assert!(program.functions[0].locals.contains_key("q"));
     }
 }

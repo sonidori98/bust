@@ -250,6 +250,14 @@ impl<'a> Lexer<'a> {
                 self.iter.next();
                 Some(Token::Question)
             }
+            '[' => {
+                self.iter.next();
+                Some(Token::LBracket)
+            }
+            ']' => {
+                self.iter.next();
+                Some(Token::RBracket)
+            }
             _ => None,
         }
     }
@@ -871,5 +879,21 @@ mod tests {
         let input = "09";
         let mut lexer = Lexer::new(input);
         lexer.tokenize();
+    }
+
+    #[test]
+    fn test_lexer_bracket() {
+        let input = "a[0]";
+        let mut lexer = Lexer::new(input);
+        assert_eq!(
+            vec![
+                Token::Identifier("a".to_string()),
+                Token::LBracket,
+                Token::Integer(0),
+                Token::RBracket,
+                Token::Eof
+            ],
+            lexer.tokenize()
+        );
     }
 }

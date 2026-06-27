@@ -50,6 +50,8 @@ pub enum Token {
     RParen,             // ')'
     LBrace,             // '{'
     RBrace,             // '}'
+    LBracket,           // '['
+    RBracket,           // ']'
     Colon,              // ':'
     Semicolon,          // ';'
     Comma,              // ','

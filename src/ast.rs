@@ -15,6 +15,12 @@ pub enum Expr {
         then_expr: Box<Expr>,
         else_expr: Box<Expr>,
     },
+    Deref(Box<Expr>),
+    Addr(Box<Expr>),
+    Index {
+        expr: Box<Expr>,
+        index: Box<Expr>,
+    },
     Call {
         name: String,
         args: Vec<Expr>,
@@ -38,6 +44,7 @@ pub enum Stmt {
     Return(Expr),
     Declaration,
     Assignment(String, Expr),
+    AssignIndex(String, Expr, Expr),
     Label(String),
     Goto(String),
     If {
@@ -63,10 +70,12 @@ pub struct Function {
     pub params: Vec<String>,
     pub body: Vec<Stmt>,
     pub locals: std::collections::HashMap<String, i64>,
+    pub arrays: std::collections::HashSet<String>,
 }
 
 #[derive(Debug, Clone)]
 pub struct Program {
     pub functions: Vec<Function>,
     pub globals: std::collections::HashMap<String, String>,
+    pub global_inits: std::collections::HashMap<String, i64>,
 }
