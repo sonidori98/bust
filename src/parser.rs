@@ -561,6 +561,14 @@ impl Parser {
         Expr::Integer(val)
     }
 
+    fn parse_primary_string_literal(&mut self) -> Expr {
+        let data = match self.next_token() {
+            Token::StringLiteral(d) => d,
+            _ => unreachable!(),
+        };
+        Expr::StringLiteral(data)
+    }
+
     fn parse_primary_identifier(&mut self, name: String) -> Expr {
         self.next_token();
         if *self.peek_token() == Token::Increment {
@@ -616,6 +624,7 @@ impl Parser {
         let token = self.peek_token().clone();
         match token {
             Token::Integer(_) => self.parse_primary_integer(),
+            Token::StringLiteral(_) => self.parse_primary_string_literal(),
             Token::Identifier(name) => self.parse_primary_identifier(name),
             Token::LParen => self.parse_primary_paren(),
             _ => panic!("Expected expression, but got {:?}", token),
@@ -1305,7 +1314,12 @@ mod tests {
 
         assert_eq!(body.len(), 2);
         assert!(matches!(&body[1], Stmt::Switch { .. }));
-        if let Stmt::Switch { cond: _, cases, body: switch_body } = &body[1] {
+        if let Stmt::Switch {
+            cond: _,
+            cases,
+            body: switch_body,
+        } = &body[1]
+        {
             assert_eq!(cases.len(), 2);
             assert_eq!(cases[0], (1, format!("sw_1_case_1")));
             assert_eq!(cases[1], (2, format!("sw_1_case_2")));

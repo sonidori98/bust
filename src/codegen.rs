@@ -9,6 +9,7 @@ pub struct Codegen {
     output: String,
     current_func_name: String,
     label_count: usize,
+    strings: Vec<Vec<u8>>,
 }
 
 impl Codegen {
@@ -17,6 +18,7 @@ impl Codegen {
             output: String::new(),
             current_func_name: String::new(),
             label_count: 0,
+            strings: Vec::new(),
         }
     }
 
@@ -37,6 +39,17 @@ impl Codegen {
         for func in &program.functions {
             self.current_func_name = func.name.clone();
             self.generate_function(func, &program.globals);
+        }
+
+        if !self.strings.is_empty() {
+            self.output.push_str("\n.section .rodata\n");
+            for (i, data) in self.strings.iter().enumerate() {
+                self.output.push_str(&format!(".string_{}:\n", i));
+                self.output.push_str("    .byte ");
+                let bytes: Vec<String> = data.iter().map(|b| b.to_string()).collect();
+                self.output.push_str(&bytes.join(", "));
+                self.output.push_str("\n");
+            }
         }
 
         self.output.clone()
@@ -488,7 +501,18 @@ impl Codegen {
             Expr::Prefix { op, name } => self.generate_prefix_expr(op, name, locals, globals),
             Expr::Postfix { op, name } => self.generate_postfix_expr(op, name, locals, globals),
             Expr::Call { name, args } => self.generate_call_expr(name, args, locals, globals),
+            Expr::StringLiteral(data) => self.generate_string_literal_expr(data),
         }
+    }
+
+    fn generate_string_literal_expr(&mut self, data: &[u8]) {
+        let idx = self.strings.len();
+        let mut owned = data.to_vec();
+        owned.push(0); // null-terminate
+        self.strings.push(owned);
+        self.output
+            .push_str(&format!("    lea rax, [rip + .string_{}]\n", idx));
+        self.output.push_str("    push rax\n");
     }
 }
 
@@ -1011,5 +1035,41 @@ main:
         assert!(code.contains("cqo"));
         assert!(code.contains("idiv rdi"));
         assert!(code.contains("mov rax, rdx"));
+    }
+
+    #[test]
+    fn test_codegen_string_literal() {
+        let input = "main() { return \"Hello\"; }";
+        let mut lexer = Lexer::new(input);
+        let mut parser = Parser::new(lexer.tokenize());
+        let cr = parser.parse_program();
+        let code = Codegen::new().generate(&cr);
+
+        assert!(code.contains("lea rax, [rip + .string_0]"));
+        assert!(code.contains(".section .rodata"));
+        assert!(code.contains(".string_0:"));
+        assert!(code.contains(".byte 72, 101, 108, 108, 111, 0"));
+    }
+
+    #[test]
+    fn test_codegen_string_literal_escape() {
+        let input = "main() { return \"*n\"; }";
+        let mut lexer = Lexer::new(input);
+        let mut parser = Parser::new(lexer.tokenize());
+        let cr = parser.parse_program();
+        let code = Codegen::new().generate(&cr);
+
+        assert!(code.contains(".byte 10, 0"));
+    }
+
+    #[test]
+    fn test_codegen_string_literal_empty() {
+        let input = "main() { return \"\"; }";
+        let mut lexer = Lexer::new(input);
+        let mut parser = Parser::new(lexer.tokenize());
+        let cr = parser.parse_program();
+        let code = Codegen::new().generate(&cr);
+
+        assert!(code.contains(".byte 0"));
     }
 }

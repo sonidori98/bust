@@ -11,6 +11,7 @@ pub enum Token {
     Switch,
     Case,
     Integer(i64),
+    StringLiteral(Vec<u8>),
     Plus,               // +
     Minus,              // -
     Star,               // *

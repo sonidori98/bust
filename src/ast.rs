@@ -3,6 +3,7 @@ use crate::token::Token;
 #[derive(Debug, Clone)]
 pub enum Expr {
     Integer(i64),
+    StringLiteral(Vec<u8>),
     Identifier(String),
     Binary {
         op: Token,
