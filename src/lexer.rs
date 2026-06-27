@@ -22,6 +22,18 @@ impl<'a> Lexer<'a> {
                 continue;
             }
 
+            // block comments
+            if c == '/' {
+                self.iter.next();
+                if self.iter.peek() == Some(&'*') {
+                    self.iter.next();
+                    self.skip_block_comment();
+                    continue;
+                }
+                tokens.push(Token::Slash);
+                continue;
+            }
+
             // parentheses and delimiters
             if let Some(t) = self.read_sign() {
                 tokens.push(t);
@@ -98,10 +110,6 @@ impl<'a> Lexer<'a> {
             '*' => {
                 self.iter.next();
                 Some(Token::Star)
-            }
-            '/' => {
-                self.iter.next();
-                Some(Token::Slash)
             }
             '%' => {
                 self.iter.next();
@@ -239,6 +247,16 @@ impl<'a> Lexer<'a> {
         }
         let num = num_str.parse::<i64>().expect("Failed to parse integer");
         Token::Integer(num)
+    }
+
+    fn skip_block_comment(&mut self) {
+        while let Some(c) = self.iter.next() {
+            if c == '*' && self.iter.peek() == Some(&'/') {
+                self.iter.next();
+                return;
+            }
+        }
+        panic!("Unterminated block comment");
     }
 
     fn read_identifier(&mut self) -> Token {
@@ -443,6 +461,63 @@ mod tests {
             ],
             lexer.tokenize()
         );
+    }
+
+    #[test]
+    fn test_lexer_block_comment() {
+        let input = "1 /* comment */ 2";
+        let mut lexer = Lexer::new(input);
+
+        assert_eq!(
+            vec![Token::Integer(1), Token::Integer(2), Token::Eof],
+            lexer.tokenize()
+        );
+    }
+
+    #[test]
+    fn test_lexer_block_comment_empty() {
+        let input = "1 /**/ 2";
+        let mut lexer = Lexer::new(input);
+
+        assert_eq!(
+            vec![Token::Integer(1), Token::Integer(2), Token::Eof],
+            lexer.tokenize()
+        );
+    }
+
+    #[test]
+    fn test_lexer_block_comment_multiline() {
+        let input = "1 /* line1\nline2\nline3 */ 2";
+        let mut lexer = Lexer::new(input);
+
+        assert_eq!(
+            vec![Token::Integer(1), Token::Integer(2), Token::Eof],
+            lexer.tokenize()
+        );
+    }
+
+    #[test]
+    fn test_lexer_block_comment_special_chars() {
+        let input = "1 /* == */ 2 /* ++ */ 3";
+        let mut lexer = Lexer::new(input);
+
+        assert_eq!(
+            vec![
+                Token::Integer(1),
+                Token::Integer(2),
+                Token::Integer(3),
+                Token::Eof
+            ],
+            lexer.tokenize()
+        );
+    }
+
+    #[test]
+    #[should_panic(expected = "Unterminated block comment")]
+    fn test_lexer_block_comment_unterminated() {
+        let input = "1 /* unterminated";
+        let mut lexer = Lexer::new(input);
+        lexer.tokenize();
     }
 
     #[test]
