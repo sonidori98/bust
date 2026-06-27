@@ -394,7 +394,23 @@ impl Parser {
     }
 
     fn parse_expression(&mut self) -> Expr {
-        self.parse_bit_or()
+        self.parse_conditional()
+    }
+
+    fn parse_conditional(&mut self) -> Expr {
+        let mut expr = self.parse_bit_or();
+        if *self.peek_token() == Token::Question {
+            self.consume(Token::Question);
+            let then_expr = self.parse_expression();
+            self.consume(Token::Colon);
+            let else_expr = self.parse_expression();
+            expr = Expr::Ternary {
+                cond: Box::new(expr),
+                then_expr: Box::new(then_expr),
+                else_expr: Box::new(else_expr),
+            }
+        }
+        expr
     }
 
     fn parse_bit_or(&mut self) -> Expr {
@@ -1453,6 +1469,23 @@ mod tests {
             assert!(matches!(*expr, Expr::Binary { .. }));
         } else {
             panic!("Expected unary minus of parenthesized expr");
+        }
+    }
+
+    #[test]
+    fn test_parser_ternary() {
+        let stmt = body(0, "main() { return 1 ? 10 : 20; }");
+        if let Stmt::Return(Expr::Ternary {
+            cond,
+            then_expr,
+            else_expr,
+        }) = stmt
+        {
+            assert!(matches!(*cond, Expr::Integer(1)));
+            assert!(matches!(*then_expr, Expr::Integer(10)));
+            assert!(matches!(*else_expr, Expr::Integer(20)));
+        } else {
+            panic!("Expected Stmt::Return(Expr::Ternary)");
         }
     }
 

@@ -246,6 +246,10 @@ impl<'a> Lexer<'a> {
                     Some(Token::GreaterThan)
                 }
             }
+            '?' => {
+                self.iter.next();
+                Some(Token::Question)
+            }
             _ => None,
         }
     }
@@ -793,6 +797,23 @@ mod tests {
                 Token::GreaterEqual,
                 Token::Integer(6),
                 Token::If,
+                Token::Eof
+            ],
+            lexer.tokenize()
+        );
+    }
+
+    #[test]
+    fn test_lexer_question() {
+        let input = "1 ? 2 : 3";
+        let mut lexer = Lexer::new(input);
+        assert_eq!(
+            vec![
+                Token::Integer(1),
+                Token::Question,
+                Token::Integer(2),
+                Token::Colon,
+                Token::Integer(3),
                 Token::Eof
             ],
             lexer.tokenize()

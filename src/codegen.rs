@@ -148,21 +148,21 @@ impl Codegen {
 
         if let Some(else_stmts) = else_body {
             self.output.push_str(&format!("    je .L_ELSE_{}\n", id));
-                for stmt in then_body {
-                    self.generate_statement(stmt, locals, globals);
-                }
-                self.output.push_str(&format!("    jmp .L_END_{}\n", id));
+            for stmt in then_body {
+                self.generate_statement(stmt, locals, globals);
+            }
+            self.output.push_str(&format!("    jmp .L_END_{}\n", id));
 
-                self.output.push_str(&format!(".L_ELSE_{}:\n", id));
-                for stmt in else_stmts {
-                    self.generate_statement(stmt, locals, globals);
-                }
-                self.output.push_str(&format!(".L_END_{}:\n", id));
-            } else {
-                self.output.push_str(&format!("    je .L_END_{}\n", id));
-                for stmt in then_body {
-                    self.generate_statement(stmt, locals, globals);
-                }
+            self.output.push_str(&format!(".L_ELSE_{}:\n", id));
+            for stmt in else_stmts {
+                self.generate_statement(stmt, locals, globals);
+            }
+            self.output.push_str(&format!(".L_END_{}:\n", id));
+        } else {
+            self.output.push_str(&format!("    je .L_END_{}\n", id));
+            for stmt in then_body {
+                self.generate_statement(stmt, locals, globals);
+            }
             self.output.push_str(&format!(".L_END_{}:\n", id));
         }
     }
@@ -236,7 +236,9 @@ impl Codegen {
     ) {
         match stmt {
             Stmt::Return(expr) => self.generate_return_stmt(expr, locals, globals),
-            Stmt::Assignment(name, expr) => self.generate_assignment_stmt(name, expr, locals, globals),
+            Stmt::Assignment(name, expr) => {
+                self.generate_assignment_stmt(name, expr, locals, globals)
+            }
             Stmt::Declaration => self.generate_declaration_stmt(),
             Stmt::Label(name) => self.generate_label_stmt(name),
             Stmt::Goto(name) => self.generate_goto_stmt(name),
@@ -246,7 +248,9 @@ impl Codegen {
                 else_body,
             } => self.generate_if_stmt(cond, then_body, else_body, locals, globals),
             Stmt::While { cond, body } => self.generate_while_stmt(cond, body, locals, globals),
-            Stmt::Switch { cond, cases, body } => self.generate_switch_stmt(cond, cases, body, locals, globals),
+            Stmt::Switch { cond, cases, body } => {
+                self.generate_switch_stmt(cond, cases, body, locals, globals)
+            }
             Stmt::Expr(expr) => self.generate_expr_stmt(expr, locals, globals),
         }
     }
@@ -502,13 +506,40 @@ impl Codegen {
             Expr::Postfix { op, name } => self.generate_postfix_expr(op, name, locals, globals),
             Expr::Call { name, args } => self.generate_call_expr(name, args, locals, globals),
             Expr::StringLiteral(data) => self.generate_string_literal_expr(data),
+            Expr::Ternary {
+                cond,
+                then_expr,
+                else_expr,
+            } => self.generate_ternary_expr(cond, then_expr, else_expr, locals, globals),
         }
+    }
+
+    fn generate_ternary_expr(
+        &mut self,
+        cond: &Expr,
+        then_expr: &Expr,
+        else_expr: &Expr,
+        locals: &HashMap<String, i64>,
+        globals: &HashMap<String, String>,
+    ) {
+        let id = self.new_label();
+        self.generate_expression(cond, locals, globals);
+        self.output.push_str("    pop rax\n");
+        self.output.push_str("    cmp rax, 0\n");
+        self.output
+            .push_str(&format!("    je .L_TERNARY_ELSE_{}\n", id));
+        self.generate_expression(then_expr, locals, globals);
+        self.output
+            .push_str(&format!("    jmp .L_TERNARY_END_{}\n", id));
+        self.output.push_str(&format!(".L_TERNARY_ELSE_{}:\n", id));
+        self.generate_expression(else_expr, locals, globals);
+        self.output.push_str(&format!(".L_TERNARY_END_{}:\n", id));
     }
 
     fn generate_string_literal_expr(&mut self, data: &[u8]) {
         let idx = self.strings.len();
         let mut owned = data.to_vec();
-        owned.push(0); // null-terminate
+        owned.push(0);
         self.strings.push(owned);
         self.output
             .push_str(&format!("    lea rax, [rip + .string_{}]\n", idx));
@@ -1082,5 +1113,22 @@ main:
         let code = Codegen::new().generate(&cr);
 
         assert!(code.contains(".byte 0"));
+    }
+
+    #[test]
+    fn test_codegen_ternary() {
+        let input = "main() { return 1 ? 10 : 20; }";
+        let mut lexer = Lexer::new(input);
+        let mut parser = Parser::new(lexer.tokenize());
+        let cr = parser.parse_program();
+        let code = Codegen::new().generate(&cr);
+
+        assert!(code.contains("cmp rax, 0"));
+        assert!(code.contains("je .L_TERNARY_ELSE_0"));
+        assert!(code.contains("jmp .L_TERNARY_END_0"));
+        assert!(code.contains(".L_TERNARY_ELSE_0:"));
+        assert!(code.contains(".L_TERNARY_END_0:"));
+        assert!(code.contains("mov rax, 10"));
+        assert!(code.contains("mov rax, 20"));
     }
 }

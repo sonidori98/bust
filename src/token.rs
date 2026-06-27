@@ -53,6 +53,7 @@ pub enum Token {
     Colon,              // ':'
     Semicolon,          // ';'
     Comma,              // ','
+    Question,           // '?'
     Identifier(String),
     Eof, // End of file
 }
