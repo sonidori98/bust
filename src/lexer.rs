@@ -259,7 +259,16 @@ impl<'a> Lexer<'a> {
                 break;
             }
         }
-        let num = num_str.parse::<i64>().expect("Failed to parse integer");
+        let num = if num_str.len() > 1 && num_str.starts_with('0') {
+            for c in num_str.chars() {
+                if c < '0' || c > '7' {
+                    panic!("Invalid octal digit: {}", c);
+                }
+            }
+            i64::from_str_radix(&num_str, 8).expect("Failed to parse octal integer")
+        } else {
+            num_str.parse::<i64>().expect("Failed to parse integer")
+        };
         Token::Integer(num)
     }
 
@@ -788,5 +797,58 @@ mod tests {
             ],
             lexer.tokenize()
         );
+    }
+
+    #[test]
+    fn test_lexer_octal_zero() {
+        let input = "0";
+        let mut lexer = Lexer::new(input);
+        assert_eq!(vec![Token::Integer(0), Token::Eof], lexer.tokenize());
+    }
+
+    #[test]
+    fn test_lexer_octal_single() {
+        let input = "00";
+        let mut lexer = Lexer::new(input);
+        assert_eq!(vec![Token::Integer(0), Token::Eof], lexer.tokenize());
+    }
+
+    #[test]
+    fn test_lexer_octal_10() {
+        let input = "010";
+        let mut lexer = Lexer::new(input);
+        assert_eq!(vec![Token::Integer(8), Token::Eof], lexer.tokenize());
+    }
+
+    #[test]
+    fn test_lexer_octal_777() {
+        let input = "0777";
+        let mut lexer = Lexer::new(input);
+        assert_eq!(vec![Token::Integer(511), Token::Eof], lexer.tokenize());
+    }
+
+    #[test]
+    fn test_lexer_octal_12345() {
+        let input = "012345";
+        let mut lexer = Lexer::new(input);
+        assert_eq!(vec![Token::Integer(5349), Token::Eof], lexer.tokenize());
+    }
+
+    #[test]
+    fn test_lexer_decimal_still_works() {
+        let input = "10 123 999";
+        let mut lexer = Lexer::new(input);
+        assert_eq!(
+            vec![Token::Integer(10), Token::Integer(123), Token::Integer(999), Token::Eof],
+            lexer.tokenize()
+        );
+    }
+
+    #[test]
+    #[should_panic(expected = "Invalid octal digit")]
+    fn test_lexer_octal_invalid() {
+        let input = "09";
+        let mut lexer = Lexer::new(input);
+        lexer.tokenize();
     }
 }
