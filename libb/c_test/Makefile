@@ -1,9 +1,9 @@
-RUST_DIR = ..
+RUST_DIR = ../..
 RUST_LIB = $(RUST_DIR)/target/debug/liblibb.a
 
 CC = gcc
 CFLAGS = -Wall -Wextra -fno-builtin
-TESTS = test_putchar test_printn test_printf test_execl test_ctime
+TESTS = test_putchar test_printn test_printf test_execl test_ctime test_gtty_stty
 
 all: $(TESTS)
 
@@ -21,6 +21,9 @@ test_execl: test_execl.c build_rust
 
 test_ctime: test_ctime.c build_rust
 	$(CC) $(CFLAGS) test_ctime.c $(RUST_LIB) -o test_ctime
+
+test_gtty_stty: test_gtty_stty.c build_rust
+	$(CC) $(CFLAGS) test_gtty_stty.c $(RUST_LIB) -o test_gtty_stty
 
 build_rust:
 	cargo build --manifest-path=$(RUST_DIR)/Cargo.toml
@@ -57,6 +60,8 @@ run: all
 	./test_execl
 	@echo "=== Running test_ctime ==="
 	./test_ctime
+	@echo "=== Running test_gtty_stty ==="
+	./test_gtty_stty
 
 clean:
 	rm -f $(TESTS) test_prog

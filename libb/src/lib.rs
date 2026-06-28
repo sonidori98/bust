@@ -366,9 +366,75 @@ pub extern "sysv64" fn getuid() -> i64 {
     unsafe { syscall(SYS_getuid) }
 }
 
+struct Sgttyb {
+    ispeed: u8,
+    ospeed: u8,
+    erase: u8,
+    kill: u8,
+    flags: i32,
+}
+
+const SG_LCASE: i32 = 0o0000001;
+const SG_ECHO: i32 = 0o0000010;
+const SG_CBREAK: i32 = 0o0000020;
+const SG_RAW: i32 = 0o0000040;
+const SG_CRMOD: i32 = 0o0000200;
+const SG_NL2: i32 = 0o0000400;
+const SG_TANDEM: i32 = 0o0001000;
+const SG_XTABS: i32 = 0o040000;
+
 #[unsafe(no_mangle)]
-pub extern "sysv64" fn gtty(_file: i64, _ttystat: i64) -> i64 {
-    todo!()
+pub extern "sysv64" fn gtty(file: i64, ttystat: i64) -> i64 {
+    let mut tios: libc::termios = unsafe { std::mem::zeroed() };
+    let ret = unsafe { libc::tcgetattr(file as i32, &mut tios) };
+    if ret < 0 {
+        return -1;
+    }
+    let mut flags: i32 = 0;
+
+    if tios.c_lflag & libc::ECHO as u32 != 0 {
+        flags |= SG_ECHO;
+    }
+    let is_raw = tios.c_iflag
+        & (libc::BRKINT | libc::ICRNL | libc::INPCK | libc::ISTRIP | libc::IXON) as u32
+        == 0
+        && tios.c_oflag & libc::OPOST as u32 == 0
+        && tios.c_cflag & (libc::CSIZE as u32) == libc::CS8 as u32
+        && !(tios.c_lflag & (libc::ICANON | libc::ECHO | libc::ISIG | libc::IEXTEN) as u32 != 0);
+    let is_cbreak =
+        !(tios.c_lflag & libc::ICANON as u32 != 0) && !(tios.c_lflag & libc::ECHO as u32 != 0);
+    if is_raw {
+        flags |= SG_RAW;
+    } else if is_cbreak {
+        flags |= SG_CBREAK;
+    }
+    if tios.c_iflag & libc::ICRNL as u32 != 0 && tios.c_oflag & libc::ONLCR as u32 != 0 {
+        flags |= SG_CRMOD;
+    }
+    if tios.c_iflag & libc::IUCLC as u32 != 0 {
+        flags |= SG_LCASE;
+    }
+    if tios.c_iflag & libc::IXOFF as u32 != 0 {
+        flags |= SG_TANDEM;
+    }
+    if tios.c_oflag & libc::OPOST as u32 != 0 && tios.c_oflag & libc::ONLCR as u32 != 0 {
+        flags |= SG_NL2;
+    }
+    if tios.c_oflag & libc::TABDLY as u32 == libc::TAB3 as u32 {
+        flags |= SG_XTABS;
+    }
+
+    let sg = Sgttyb {
+        ispeed: unsafe { libc::cfgetispeed(&tios) } as u8,
+        ospeed: unsafe { libc::cfgetospeed(&tios) } as u8,
+        erase: tios.c_cc[libc::VERASE] as u8,
+        kill: tios.c_cc[libc::VKILL] as u8,
+        flags,
+    };
+    unsafe {
+        std::ptr::write_unaligned(ttystat as *mut Sgttyb, sg);
+    }
+    0
 }
 
 #[unsafe(no_mangle)]
@@ -417,8 +483,73 @@ pub extern "sysv64" fn stat(string: i64, status: i64) -> i64 {
 }
 
 #[unsafe(no_mangle)]
-pub extern "sysv64" fn stty(_file: i64, _ttystat: i64) -> i64 {
-    todo!()
+pub extern "sysv64" fn stty(file: i64, ttystat: i64) -> i64 {
+    let sg = unsafe { std::ptr::read_unaligned(ttystat as *const Sgttyb) };
+    let mut tios: libc::termios = unsafe { std::mem::zeroed() };
+    if unsafe { libc::tcgetattr(file as i32, &mut tios) } < 0 {
+        return -1;
+    }
+
+    if sg.flags & SG_RAW != 0 {
+        tios.c_iflag &=
+            !(libc::BRKINT | libc::ICRNL | libc::INPCK | libc::ISTRIP | libc::IXON) as u32;
+        tios.c_oflag &= !libc::OPOST as u32;
+        tios.c_cflag = (tios.c_cflag & !libc::CSIZE as u32) | libc::CS8 as u32;
+        tios.c_lflag &= !(libc::ICANON | libc::ECHO | libc::ISIG | libc::IEXTEN) as u32;
+        tios.c_cc[libc::VMIN] = 1;
+        tios.c_cc[libc::VTIME] = 0;
+    } else if sg.flags & SG_CBREAK != 0 {
+        tios.c_lflag &= !(libc::ICANON | libc::ECHO) as u32;
+    } else {
+        if sg.flags & SG_ECHO != 0 {
+            tios.c_lflag |= libc::ECHO as u32;
+        } else {
+            tios.c_lflag &= !libc::ECHO as u32;
+        }
+    }
+
+    if sg.flags & SG_CRMOD != 0 {
+        tios.c_iflag |= libc::ICRNL as u32;
+        tios.c_oflag |= libc::ONLCR as u32;
+    } else {
+        tios.c_iflag &= !libc::ICRNL as u32;
+        tios.c_oflag &= !libc::ONLCR as u32;
+    }
+
+    if sg.flags & SG_LCASE != 0 {
+        tios.c_iflag |= libc::IUCLC as u32;
+        tios.c_oflag |= libc::OLCUC as u32;
+    } else {
+        tios.c_iflag &= !libc::IUCLC as u32;
+        tios.c_oflag &= !libc::OLCUC as u32;
+    }
+
+    if sg.flags & SG_TANDEM != 0 {
+        tios.c_iflag |= libc::IXOFF as u32;
+    } else {
+        tios.c_iflag &= !libc::IXOFF as u32;
+    }
+
+    if sg.flags & SG_NL2 != 0 {
+        tios.c_oflag |= libc::ONLCR as u32;
+    }
+
+    if sg.flags & SG_XTABS != 0 {
+        tios.c_oflag = (tios.c_oflag & !libc::TABDLY as u32) | libc::TAB3 as u32;
+    } else {
+        tios.c_oflag &= !libc::TABDLY as u32;
+    }
+
+    if sg.ispeed != 0 {
+        unsafe { libc::cfsetispeed(&mut tios, sg.ispeed as u32) };
+    }
+    if sg.ospeed != 0 {
+        unsafe { libc::cfsetospeed(&mut tios, sg.ospeed as u32) };
+    }
+    tios.c_cc[libc::VERASE] = sg.erase as u8;
+    tios.c_cc[libc::VKILL] = sg.kill as u8;
+
+    unsafe { libc::tcsetattr(file as i32, libc::TCSANOW, &tios) as i64 }
 }
 
 #[unsafe(no_mangle)]
@@ -443,4 +574,81 @@ pub extern "sysv64" fn wait() -> i64 {
 #[unsafe(no_mangle)]
 pub extern "sysv64" fn nwrite(file: i64, buffer: i64, count: i64) -> i64 {
     unsafe { syscall(SYS_write, file, buffer, count) }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_gtty_invalid_fd() {
+        let mut buf = [0i64; 8];
+        assert_eq!(gtty(-1, &mut buf as *mut _ as i64), -1);
+    }
+
+    #[test]
+    fn test_stty_invalid_fd() {
+        let buf = [0i64; 8];
+        assert_eq!(stty(-1, &buf as *const _ as i64), -1);
+    }
+
+    #[test]
+    fn test_gtty_pipe_fd() {
+        let mut fds = [0i32; 2];
+        let ret = unsafe { libc::pipe(fds.as_mut_ptr()) };
+        assert_eq!(ret, 0);
+        let mut buf = [0i64; 8];
+        assert_eq!(gtty(fds[0] as i64, &mut buf as *mut _ as i64), -1);
+        assert_eq!(gtty(fds[1] as i64, &mut buf as *mut _ as i64), -1);
+        unsafe { libc::close(fds[0]); libc::close(fds[1]); }
+    }
+
+    #[test]
+    fn test_stty_pipe_fd() {
+        let mut fds = [0i32; 2];
+        let ret = unsafe { libc::pipe(fds.as_mut_ptr()) };
+        assert_eq!(ret, 0);
+        let buf = [0i64; 8];
+        assert_eq!(stty(fds[0] as i64, &buf as *const _ as i64), -1);
+        assert_eq!(stty(fds[1] as i64, &buf as *const _ as i64), -1);
+        unsafe { libc::close(fds[0]); libc::close(fds[1]); }
+    }
+
+    #[test]
+    fn test_gtty_stty_flag_roundtrip_on_tty() {
+        let fd = unsafe { libc::open("/dev/tty\0".as_ptr() as *const i8, libc::O_RDWR) };
+        if fd < 0 {
+            let fd2 = unsafe { libc::open("/dev/console\0".as_ptr() as *const i8, libc::O_RDWR) };
+            if fd2 < 0 {
+                eprintln!("skipping tty test: no tty available");
+                return;
+            }
+            let mut buf = [0i64; 8];
+            assert_eq!(gtty(fd2 as i64, &mut buf as *mut _ as i64), 0);
+            assert_eq!(stty(fd2 as i64, &buf as *const _ as i64), 0);
+            unsafe { libc::close(fd2); }
+        } else {
+            let mut buf = [0i64; 8];
+            assert_eq!(gtty(fd as i64, &mut buf as *mut _ as i64), 0);
+            assert_eq!(stty(fd as i64, &buf as *const _ as i64), 0);
+            unsafe { libc::close(fd); }
+        }
+    }
+
+    #[test]
+    fn test_sgttyb_flag_values() {
+        assert_eq!(SG_LCASE, 0o0000001);
+        assert_eq!(SG_ECHO, 0o0000010);
+        assert_eq!(SG_CBREAK, 0o0000020);
+        assert_eq!(SG_RAW, 0o0000040);
+        assert_eq!(SG_CRMOD, 0o0000200);
+        assert_eq!(SG_NL2, 0o0000400);
+        assert_eq!(SG_TANDEM, 0o0001000);
+        assert_eq!(SG_XTABS, 0o040000);
+    }
+
+    #[test]
+    fn test_sgttyb_struct_size() {
+        assert_eq!(std::mem::size_of::<Sgttyb>(), 8);
+    }
 }
