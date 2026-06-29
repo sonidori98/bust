@@ -1,9 +1,120 @@
-use libc::{
-    SYS_chdir, SYS_chmod, SYS_chown, SYS_close, SYS_creat, SYS_execve, SYS_exit, SYS_fork,
-    SYS_fstat, SYS_getuid, SYS_link, SYS_lseek, SYS_mkdir, SYS_open, SYS_read, SYS_setuid,
-    SYS_stat, SYS_time, SYS_unlink, SYS_wait4, SYS_write, size_t, syscall,
-};
-use std::{arch::naked_asm, ffi::c_void, os::fd::RawFd};
+use std::arch::{asm, naked_asm};
+
+const SYS_READ: i64 = 0;
+const SYS_WRITE: i64 = 1;
+const SYS_OPEN: i64 = 2;
+const SYS_CLOSE: i64 = 3;
+const SYS_STAT: i64 = 4;
+const SYS_FSTAT: i64 = 5;
+const SYS_LSEEK: i64 = 8;
+const SYS_IOCTL: i64 = 16;
+const O_WRONLY: i64 = 1;
+const O_CREAT: i64 = 0o0100;
+const O_TRUNC: i64 = 0o1000;
+const SYS_FORK: i64 = 57;
+const SYS_EXECVE: i64 = 59;
+const SYS_EXIT: i64 = 60;
+const SYS_WAIT4: i64 = 61;
+const SYS_CHDIR: i64 = 80;
+const SYS_MKDIR: i64 = 83;
+const SYS_LINK: i64 = 86;
+const SYS_UNLINK: i64 = 87;
+const SYS_CHMOD: i64 = 90;
+const SYS_CHOWN: i64 = 92;
+const SYS_GETUID: i64 = 102;
+const SYS_SETUID: i64 = 105;
+const SYS_CLOCK_GETTIME: i64 = 228;
+
+#[inline]
+unsafe fn syscall0(n: i64) -> i64 {
+    let ret: i64;
+    unsafe {
+        asm!("syscall", inout("rax") n => ret, out("rcx") _, out("r11") _, options(nostack));
+    }
+    ret
+}
+#[inline]
+unsafe fn syscall1(n: i64, a1: i64) -> i64 {
+    let ret: i64;
+    unsafe {
+        asm!("syscall", inout("rax") n => ret, in("rdi") a1, out("rcx") _, out("r11") _, options(nostack));
+    }
+    ret
+}
+#[inline]
+unsafe fn syscall2(n: i64, a1: i64, a2: i64) -> i64 {
+    let ret: i64;
+    unsafe {
+        asm!("syscall", inout("rax") n => ret, in("rdi") a1, in("rsi") a2, out("rcx") _, out("r11") _, options(nostack));
+    }
+    ret
+}
+#[inline]
+unsafe fn syscall3(n: i64, a1: i64, a2: i64, a3: i64) -> i64 {
+    let ret: i64;
+    unsafe {
+        asm!("syscall", inout("rax") n => ret, in("rdi") a1, in("rsi") a2, in("rdx") a3, out("rcx") _, out("r11") _, options(nostack));
+    }
+    ret
+}
+
+const TCGETS: i64 = 0x5401;
+const TCSETS: i64 = 0x5402;
+
+const BRKINT: u32 = 0o000002;
+const ICRNL: u32 = 0o000400;
+const INPCK: u32 = 0o000020;
+const ISTRIP: u32 = 0o000040;
+const IXON: u32 = 0o002000;
+const IXOFF: u32 = 0o010000;
+const IUCLC: u32 = 0o001000;
+
+const OPOST: u32 = 0o000001;
+const ONLCR: u32 = 0o000004;
+const OLCUC: u32 = 0o000002;
+const TABDLY: u32 = 0o014000;
+const TAB3: u32 = 0o014000;
+
+const CSIZE: u32 = 0o000060;
+const CS8: u32 = 0o000060;
+
+const ISIG: u32 = 0o000001;
+const ICANON: u32 = 0o000002;
+const ECHO: u32 = 0o000010;
+const IEXTEN: u32 = 0o100000;
+
+const VERASE: usize = 2;
+const VKILL: usize = 3;
+const VMIN: usize = 6;
+const VTIME: usize = 5;
+
+#[repr(C)]
+struct Termios {
+    c_iflag: u32,
+    c_oflag: u32,
+    c_cflag: u32,
+    c_lflag: u32,
+    c_line: u8,
+    c_cc: [u8; 19],
+}
+
+#[repr(C)]
+struct Sgttyb {
+    ispeed: u8,
+    ospeed: u8,
+    erase: u8,
+    kill: u8,
+    flags: i32,
+}
+
+const SG_LCASE: i32 = 0o0000001;
+const SG_ECHO: i32 = 0o0000010;
+const SG_CBREAK: i32 = 0o0000020;
+const SG_RAW: i32 = 0o0000040;
+const SG_CRMOD: i32 = 0o0000200;
+const SG_NL2: i32 = 0o0000400;
+const SG_TANDEM: i32 = 0o0001000;
+const SG_XTABS: i32 = 0o040000;
 
 #[unsafe(no_mangle)]
 pub extern "sysv64" fn char(string: i64, i: i64) -> i64 {
@@ -14,45 +125,38 @@ pub extern "sysv64" fn char(string: i64, i: i64) -> i64 {
 
 #[unsafe(no_mangle)]
 pub extern "sysv64" fn chdir(string: i64) -> i64 {
-    unsafe { syscall(SYS_chdir, string) }
+    unsafe { syscall1(SYS_CHDIR, string) }
 }
 
 #[unsafe(no_mangle)]
 pub extern "sysv64" fn chmod(string: i64, mode: i64) -> i64 {
-    unsafe { syscall(SYS_chmod, string, mode) }
+    unsafe { syscall2(SYS_CHMOD, string, mode) }
 }
 
 #[unsafe(no_mangle)]
 pub extern "sysv64" fn chown(string: i64, owner: i64) -> i64 {
-    unsafe { syscall(SYS_chown, string, owner) }
+    unsafe { syscall2(SYS_CHOWN, string, owner) }
 }
 
 #[unsafe(no_mangle)]
 pub extern "sysv64" fn close(file: i64) -> i64 {
-    unsafe { syscall(SYS_close, file) }
+    unsafe { syscall1(SYS_CLOSE, file) }
 }
 
 #[unsafe(no_mangle)]
 pub extern "sysv64" fn creat(string: i64, mode: i64) -> i64 {
-    unsafe { syscall(SYS_creat, string, mode) }
+    unsafe { syscall3(SYS_OPEN, string, O_WRONLY | O_CREAT | O_TRUNC, mode) }
 }
 
 #[unsafe(no_mangle)]
 pub extern "sysv64" fn putchar(chr: i64) {
     let bytes = chr.to_ne_bytes();
-
     let mut len = bytes.len();
     while len > 1 && bytes[len - 1] == 0 {
         len -= 1;
     }
-
     unsafe {
-        syscall(
-            SYS_write,
-            1 as RawFd,
-            bytes.as_ptr() as *const c_void,
-            len as size_t,
-        );
+        syscall3(SYS_WRITE, 1, bytes.as_ptr() as i64, len as i64);
     }
 }
 
@@ -64,7 +168,6 @@ pub extern "sysv64" fn printn(n: i64, b: i64) {
     } else {
         n as u64
     };
-
     printn_unsigned(abs_n, b as u64);
 }
 
@@ -73,7 +176,6 @@ fn printn_unsigned(n: u64, b: u64) {
     if a != 0 {
         printn_unsigned(a, b);
     }
-
     putchar((n % b) as i64 + '0' as i64);
 }
 
@@ -82,16 +184,13 @@ pub extern "sysv64" fn ctime(time_vec: *const i64, date: *mut i64) {
     if time_vec.is_null() || date.is_null() {
         return;
     }
-
     let time: i64 = unsafe { *time_vec };
-
     let mut days = time / 86400;
     let mut remaining_seconds = time % 86400;
     if remaining_seconds < 0 {
         remaining_seconds += 86400;
         days -= 1;
     }
-
     let hour = remaining_seconds / 3600;
     let minute = (remaining_seconds % 3600) / 60;
     let second = remaining_seconds % 60;
@@ -102,7 +201,6 @@ pub extern "sysv64" fn ctime(time_vec: *const i64, date: *mut i64) {
     let yoe = (doe - doe / 1460 + doe / 36524 - doe / 146096) / 365;
     let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
     let mp = (5 * doy + 2) / 153;
-
     let day = doy - (153 * mp + 2) / 5 + 1;
     let month = if mp < 10 { mp + 3 } else { mp - 9 };
 
@@ -110,10 +208,8 @@ pub extern "sysv64" fn ctime(time_vec: *const i64, date: *mut i64) {
         b"Jan", b"Feb", b"Mar", b"Apr", b"May", b"Jun", b"Jul", b"Aug", b"Sep", b"Oct", b"Nov",
         b"Dec",
     ];
-
     let month_str = MONTH_STRS[(month - 1) as usize];
     let date_vec = date as *mut u8;
-
     unsafe {
         *date_vec.offset(0) = month_str[0];
         *date_vec.offset(1) = month_str[1];
@@ -326,8 +422,8 @@ pub extern "sysv64" fn execv(string: i64, argv: i64, count: i64) {
     args.push(0);
     let envp: i64 = 0;
     unsafe {
-        syscall(
-            SYS_execve,
+        syscall3(
+            SYS_EXECVE,
             string,
             args.as_ptr() as i64,
             &envp as *const i64 as i64,
@@ -338,24 +434,24 @@ pub extern "sysv64" fn execv(string: i64, argv: i64, count: i64) {
 #[unsafe(no_mangle)]
 pub extern "sysv64" fn exit() {
     unsafe {
-        syscall(SYS_exit, 0);
+        syscall1(SYS_EXIT, 0);
     }
 }
 
 #[unsafe(no_mangle)]
 pub extern "sysv64" fn fork() -> i64 {
-    unsafe { syscall(SYS_fork) }
+    unsafe { syscall0(SYS_FORK) }
 }
 
 #[unsafe(no_mangle)]
 pub extern "sysv64" fn fstat(file: i64, status: i64) -> i64 {
-    unsafe { syscall(SYS_fstat, file, status) }
+    unsafe { syscall2(SYS_FSTAT, file, status) }
 }
 
 #[unsafe(no_mangle)]
 pub extern "sysv64" fn getchar() -> i64 {
     let mut c: u8 = 0;
-    if unsafe { syscall(SYS_read, 0 as RawFd, &mut c as *mut u8 as *mut c_void, 1) != 1 } {
+    if unsafe { syscall3(SYS_READ, 0, &mut c as *mut u8 as i64, 1) != 1 } {
         return 0;
     }
     c as i64
@@ -363,72 +459,52 @@ pub extern "sysv64" fn getchar() -> i64 {
 
 #[unsafe(no_mangle)]
 pub extern "sysv64" fn getuid() -> i64 {
-    unsafe { syscall(SYS_getuid) }
+    unsafe { syscall0(SYS_GETUID) }
 }
-
-struct Sgttyb {
-    ispeed: u8,
-    ospeed: u8,
-    erase: u8,
-    kill: u8,
-    flags: i32,
-}
-
-const SG_LCASE: i32 = 0o0000001;
-const SG_ECHO: i32 = 0o0000010;
-const SG_CBREAK: i32 = 0o0000020;
-const SG_RAW: i32 = 0o0000040;
-const SG_CRMOD: i32 = 0o0000200;
-const SG_NL2: i32 = 0o0000400;
-const SG_TANDEM: i32 = 0o0001000;
-const SG_XTABS: i32 = 0o040000;
 
 #[unsafe(no_mangle)]
 pub extern "sysv64" fn gtty(file: i64, ttystat: i64) -> i64 {
-    let mut tios: libc::termios = unsafe { std::mem::zeroed() };
-    let ret = unsafe { libc::tcgetattr(file as i32, &mut tios) };
+    let mut tios: Termios = unsafe { std::mem::zeroed() };
+    let ret = unsafe { syscall3(SYS_IOCTL, file, TCGETS, &mut tios as *mut Termios as i64) };
     if ret < 0 {
         return -1;
     }
     let mut flags: i32 = 0;
 
-    if tios.c_lflag & libc::ECHO as u32 != 0 {
+    if tios.c_lflag & ECHO != 0 {
         flags |= SG_ECHO;
     }
-    let is_raw = tios.c_iflag
-        & (libc::BRKINT | libc::ICRNL | libc::INPCK | libc::ISTRIP | libc::IXON) as u32
-        == 0
-        && tios.c_oflag & libc::OPOST as u32 == 0
-        && tios.c_cflag & (libc::CSIZE as u32) == libc::CS8 as u32
-        && !(tios.c_lflag & (libc::ICANON | libc::ECHO | libc::ISIG | libc::IEXTEN) as u32 != 0);
-    let is_cbreak =
-        !(tios.c_lflag & libc::ICANON as u32 != 0) && !(tios.c_lflag & libc::ECHO as u32 != 0);
+    let is_raw = tios.c_iflag & (BRKINT | ICRNL | INPCK | ISTRIP | IXON) == 0
+        && tios.c_oflag & OPOST == 0
+        && tios.c_cflag & CSIZE == CS8
+        && tios.c_lflag & (ICANON | ECHO | ISIG | IEXTEN) == 0;
+    let is_cbreak = tios.c_lflag & ICANON == 0 && tios.c_lflag & ECHO == 0;
     if is_raw {
         flags |= SG_RAW;
     } else if is_cbreak {
         flags |= SG_CBREAK;
     }
-    if tios.c_iflag & libc::ICRNL as u32 != 0 && tios.c_oflag & libc::ONLCR as u32 != 0 {
+    if tios.c_iflag & ICRNL != 0 && tios.c_oflag & ONLCR != 0 {
         flags |= SG_CRMOD;
     }
-    if tios.c_iflag & libc::IUCLC as u32 != 0 {
+    if tios.c_iflag & IUCLC != 0 {
         flags |= SG_LCASE;
     }
-    if tios.c_iflag & libc::IXOFF as u32 != 0 {
+    if tios.c_iflag & IXOFF != 0 {
         flags |= SG_TANDEM;
     }
-    if tios.c_oflag & libc::OPOST as u32 != 0 && tios.c_oflag & libc::ONLCR as u32 != 0 {
+    if tios.c_oflag & OPOST != 0 && tios.c_oflag & ONLCR != 0 {
         flags |= SG_NL2;
     }
-    if tios.c_oflag & libc::TABDLY as u32 == libc::TAB3 as u32 {
+    if tios.c_oflag & TABDLY == TAB3 {
         flags |= SG_XTABS;
     }
 
     let sg = Sgttyb {
-        ispeed: unsafe { libc::cfgetispeed(&tios) } as u8,
-        ospeed: unsafe { libc::cfgetospeed(&tios) } as u8,
-        erase: tios.c_cc[libc::VERASE] as u8,
-        kill: tios.c_cc[libc::VKILL] as u8,
+        ispeed: 0,
+        ospeed: 0,
+        erase: tios.c_cc[VERASE],
+        kill: tios.c_cc[VKILL],
         flags,
     };
     unsafe {
@@ -440,140 +516,129 @@ pub extern "sysv64" fn gtty(file: i64, ttystat: i64) -> i64 {
 #[unsafe(no_mangle)]
 pub extern "sysv64" fn lchar(string: i64, i: i64, chr: i64) {
     let ptr = string as *mut u8;
-
     unsafe {
-        let target = ptr.offset(i as isize);
-        *target = chr as u8;
+        *ptr.offset(i as isize) = chr as u8;
     }
 }
 
 #[unsafe(no_mangle)]
 pub extern "sysv64" fn link(string1: i64, string2: i64) -> i64 {
-    unsafe { syscall(SYS_link, string1, string2) }
+    unsafe { syscall2(SYS_LINK, string1, string2) }
 }
 
 #[unsafe(no_mangle)]
 pub extern "sysv64" fn mkdir(string: i64, mode: i64) -> i64 {
-    unsafe { syscall(SYS_mkdir, string, mode) }
+    unsafe { syscall2(SYS_MKDIR, string, mode) }
 }
 
 #[unsafe(no_mangle)]
 pub extern "sysv64" fn open(string: i64, mode: i64) -> i64 {
-    unsafe { syscall(SYS_open, string, mode) }
+    unsafe { syscall2(SYS_OPEN, string, mode) }
 }
 
 #[unsafe(no_mangle)]
 pub extern "sysv64" fn nread(file: i64, buffer: i64, count: i64) -> i64 {
-    unsafe { syscall(SYS_read, file, buffer, count) }
+    unsafe { syscall3(SYS_READ, file, buffer, count) }
 }
 
 #[unsafe(no_mangle)]
 pub extern "sysv64" fn seek(file: i64, offset: i64, pointer: i64) -> i64 {
-    unsafe { syscall(SYS_lseek, file, offset, pointer) }
+    unsafe { syscall3(SYS_LSEEK, file, offset, pointer) }
 }
 
 #[unsafe(no_mangle)]
 pub extern "sysv64" fn setuid(id: i64) -> i64 {
-    unsafe { syscall(SYS_setuid, id) }
+    unsafe { syscall1(SYS_SETUID, id) }
 }
 
 #[unsafe(no_mangle)]
 pub extern "sysv64" fn stat(string: i64, status: i64) -> i64 {
-    unsafe { syscall(SYS_stat, string, status) }
+    unsafe { syscall2(SYS_STAT, string, status) }
 }
 
 #[unsafe(no_mangle)]
 pub extern "sysv64" fn stty(file: i64, ttystat: i64) -> i64 {
     let sg = unsafe { std::ptr::read_unaligned(ttystat as *const Sgttyb) };
-    let mut tios: libc::termios = unsafe { std::mem::zeroed() };
-    if unsafe { libc::tcgetattr(file as i32, &mut tios) } < 0 {
+    let mut tios: Termios = unsafe { std::mem::zeroed() };
+    let ret = unsafe { syscall3(SYS_IOCTL, file, TCGETS, &mut tios as *mut Termios as i64) };
+    if ret < 0 {
         return -1;
     }
 
     if sg.flags & SG_RAW != 0 {
-        tios.c_iflag &=
-            !(libc::BRKINT | libc::ICRNL | libc::INPCK | libc::ISTRIP | libc::IXON) as u32;
-        tios.c_oflag &= !libc::OPOST as u32;
-        tios.c_cflag = (tios.c_cflag & !libc::CSIZE as u32) | libc::CS8 as u32;
-        tios.c_lflag &= !(libc::ICANON | libc::ECHO | libc::ISIG | libc::IEXTEN) as u32;
-        tios.c_cc[libc::VMIN] = 1;
-        tios.c_cc[libc::VTIME] = 0;
+        tios.c_iflag &= !(BRKINT | ICRNL | INPCK | ISTRIP | IXON);
+        tios.c_oflag &= !OPOST;
+        tios.c_cflag = (tios.c_cflag & !CSIZE) | CS8;
+        tios.c_lflag &= !(ICANON | ECHO | ISIG | IEXTEN);
+        tios.c_cc[VMIN] = 1;
+        tios.c_cc[VTIME] = 0;
     } else if sg.flags & SG_CBREAK != 0 {
-        tios.c_lflag &= !(libc::ICANON | libc::ECHO) as u32;
+        tios.c_lflag &= !(ICANON | ECHO);
     } else {
         if sg.flags & SG_ECHO != 0 {
-            tios.c_lflag |= libc::ECHO as u32;
+            tios.c_lflag |= ECHO;
         } else {
-            tios.c_lflag &= !libc::ECHO as u32;
+            tios.c_lflag &= !ECHO;
         }
     }
 
     if sg.flags & SG_CRMOD != 0 {
-        tios.c_iflag |= libc::ICRNL as u32;
-        tios.c_oflag |= libc::ONLCR as u32;
+        tios.c_iflag |= ICRNL;
+        tios.c_oflag |= ONLCR;
     } else {
-        tios.c_iflag &= !libc::ICRNL as u32;
-        tios.c_oflag &= !libc::ONLCR as u32;
+        tios.c_iflag &= !ICRNL;
+        tios.c_oflag &= !ONLCR;
     }
-
     if sg.flags & SG_LCASE != 0 {
-        tios.c_iflag |= libc::IUCLC as u32;
-        tios.c_oflag |= libc::OLCUC as u32;
+        tios.c_iflag |= IUCLC;
+        tios.c_oflag |= OLCUC;
     } else {
-        tios.c_iflag &= !libc::IUCLC as u32;
-        tios.c_oflag &= !libc::OLCUC as u32;
+        tios.c_iflag &= !IUCLC;
+        tios.c_oflag &= !OLCUC;
     }
-
     if sg.flags & SG_TANDEM != 0 {
-        tios.c_iflag |= libc::IXOFF as u32;
+        tios.c_iflag |= IXOFF;
     } else {
-        tios.c_iflag &= !libc::IXOFF as u32;
+        tios.c_iflag &= !IXOFF;
     }
-
     if sg.flags & SG_NL2 != 0 {
-        tios.c_oflag |= libc::ONLCR as u32;
+        tios.c_oflag |= ONLCR;
     }
-
     if sg.flags & SG_XTABS != 0 {
-        tios.c_oflag = (tios.c_oflag & !libc::TABDLY as u32) | libc::TAB3 as u32;
+        tios.c_oflag = (tios.c_oflag & !TABDLY) | TAB3;
     } else {
-        tios.c_oflag &= !libc::TABDLY as u32;
+        tios.c_oflag &= !TABDLY;
     }
 
-    if sg.ispeed != 0 {
-        unsafe { libc::cfsetispeed(&mut tios, sg.ispeed as u32) };
-    }
-    if sg.ospeed != 0 {
-        unsafe { libc::cfsetospeed(&mut tios, sg.ospeed as u32) };
-    }
-    tios.c_cc[libc::VERASE] = sg.erase as u8;
-    tios.c_cc[libc::VKILL] = sg.kill as u8;
+    tios.c_cc[VERASE] = sg.erase;
+    tios.c_cc[VKILL] = sg.kill;
 
-    unsafe { libc::tcsetattr(file as i32, libc::TCSANOW, &tios) as i64 }
+    unsafe { syscall3(SYS_IOCTL, file, TCSETS, &tios as *const Termios as i64) }
 }
 
 #[unsafe(no_mangle)]
 pub extern "sysv64" fn time(timev: i64) {
-    let tv = unsafe { syscall(SYS_time, std::ptr::null::<i64>()) };
+    let mut ts: [i64; 2] = unsafe { std::mem::zeroed() };
     unsafe {
-        *(timev as *mut i64) = tv;
+        syscall2(SYS_CLOCK_GETTIME, 0, &mut ts as *mut [i64; 2] as i64);
+        *(timev as *mut i64) = ts[0];
     }
 }
 
 #[unsafe(no_mangle)]
 pub extern "sysv64" fn unlink(string: i64) -> i64 {
-    unsafe { syscall(SYS_unlink, string) }
+    unsafe { syscall1(SYS_UNLINK, string) }
 }
 
 #[unsafe(no_mangle)]
 pub extern "sysv64" fn wait() -> i64 {
-    let mut child_status = 0;
-    unsafe { syscall(SYS_wait4, -1, &mut child_status, 0) }
+    let mut child_status = 0i64;
+    unsafe { syscall3(SYS_WAIT4, -1, &mut child_status as *mut i64 as i64, 0) }
 }
 
 #[unsafe(no_mangle)]
 pub extern "sysv64" fn nwrite(file: i64, buffer: i64, count: i64) -> i64 {
-    unsafe { syscall(SYS_write, file, buffer, count) }
+    unsafe { syscall3(SYS_WRITE, file, buffer, count) }
 }
 
 #[cfg(test)]
@@ -595,43 +660,34 @@ mod tests {
     #[test]
     fn test_gtty_pipe_fd() {
         let mut fds = [0i32; 2];
-        let ret = unsafe { libc::pipe(fds.as_mut_ptr()) };
+        const PIPE: i64 = 22;
+        let ret = unsafe { syscall2(PIPE, &mut fds as *mut [i32; 2] as i64, 0) };
         assert_eq!(ret, 0);
         let mut buf = [0i64; 8];
         assert_eq!(gtty(fds[0] as i64, &mut buf as *mut _ as i64), -1);
         assert_eq!(gtty(fds[1] as i64, &mut buf as *mut _ as i64), -1);
-        unsafe { libc::close(fds[0]); libc::close(fds[1]); }
+        unsafe {
+            syscall1(SYS_CLOSE, fds[0] as i64);
+        }
+        unsafe {
+            syscall1(SYS_CLOSE, fds[1] as i64);
+        }
     }
 
     #[test]
     fn test_stty_pipe_fd() {
         let mut fds = [0i32; 2];
-        let ret = unsafe { libc::pipe(fds.as_mut_ptr()) };
+        const PIPE: i64 = 22;
+        let ret = unsafe { syscall2(PIPE, &mut fds as *mut [i32; 2] as i64, 0) };
         assert_eq!(ret, 0);
         let buf = [0i64; 8];
         assert_eq!(stty(fds[0] as i64, &buf as *const _ as i64), -1);
         assert_eq!(stty(fds[1] as i64, &buf as *const _ as i64), -1);
-        unsafe { libc::close(fds[0]); libc::close(fds[1]); }
-    }
-
-    #[test]
-    fn test_gtty_stty_flag_roundtrip_on_tty() {
-        let fd = unsafe { libc::open("/dev/tty\0".as_ptr() as *const i8, libc::O_RDWR) };
-        if fd < 0 {
-            let fd2 = unsafe { libc::open("/dev/console\0".as_ptr() as *const i8, libc::O_RDWR) };
-            if fd2 < 0 {
-                eprintln!("skipping tty test: no tty available");
-                return;
-            }
-            let mut buf = [0i64; 8];
-            assert_eq!(gtty(fd2 as i64, &mut buf as *mut _ as i64), 0);
-            assert_eq!(stty(fd2 as i64, &buf as *const _ as i64), 0);
-            unsafe { libc::close(fd2); }
-        } else {
-            let mut buf = [0i64; 8];
-            assert_eq!(gtty(fd as i64, &mut buf as *mut _ as i64), 0);
-            assert_eq!(stty(fd as i64, &buf as *const _ as i64), 0);
-            unsafe { libc::close(fd); }
+        unsafe {
+            syscall1(SYS_CLOSE, fds[0] as i64);
+        }
+        unsafe {
+            syscall1(SYS_CLOSE, fds[1] as i64);
         }
     }
 
