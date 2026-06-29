@@ -37,6 +37,10 @@ pub enum Expr {
         op: Token,
         name: String,
     },
+    Assign {
+        lhs: Box<Expr>,
+        rhs: Box<Expr>,
+    },
 }
 
 #[derive(Debug, Clone)]

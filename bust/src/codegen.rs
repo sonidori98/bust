@@ -598,6 +598,9 @@ impl Codegen {
             Expr::Index { expr, index } => {
                 self.generate_index_expr(expr, index, locals, globals)
             }
+            Expr::Assign { lhs, rhs } => {
+                self.generate_assign_expr(lhs, rhs, locals, globals)
+            }
         }
     }
 
@@ -635,8 +638,58 @@ impl Codegen {
                     panic!("Undefined variable: {}", name);
                 }
             }
+            Expr::Index { expr: inner, index } => {
+                self.generate_expression(inner, locals, globals);
+                self.generate_expression(index, locals, globals);
+                self.output.push_str("    pop rdi\n");
+                self.output.push_str("    pop rax\n");
+                self.output.push_str("    lea rax, [rax + rdi*8]\n");
+                self.output.push_str("    push rax\n");
+            }
             _ => panic!("Unsupported operand for '&'"),
         }
+    }
+
+    fn generate_assign_expr(
+        &mut self,
+        lhs: &Expr,
+        rhs: &Expr,
+        locals: &HashMap<String, i64>,
+        globals: &HashMap<String, String>,
+    ) {
+        match lhs {
+            Expr::Deref(inner) => {
+                self.generate_expression(inner, locals, globals);
+            }
+            Expr::Identifier(name) => {
+                if let Some(offset) = locals.get(name) {
+                    self.output
+                        .push_str(&format!("    lea rax, [rbp + {}]\n", offset));
+                } else if let Some(label) = globals.get(name) {
+                    self.output
+                        .push_str(&format!("    lea rax, [rip + {}]\n", label));
+                } else {
+                    panic!("Undefined variable: {}", name);
+                }
+                self.output.push_str("    push rax\n");
+            }
+            Expr::Index { expr, index } => {
+                self.generate_expression(expr, locals, globals);
+                self.generate_expression(index, locals, globals);
+                self.output.push_str("    pop rdi\n");
+                self.output.push_str("    pop rax\n");
+                self.output.push_str("    lea rax, [rax + rdi*8]\n");
+                self.output.push_str("    push rax\n");
+            }
+            _ => {
+                self.generate_expression(lhs, locals, globals);
+            }
+        }
+        self.generate_expression(rhs, locals, globals);
+        self.output.push_str("    pop rcx\n");
+        self.output.push_str("    pop rax\n");
+        self.output.push_str("    mov [rax], rcx\n");
+        self.output.push_str("    push rcx\n");
     }
 
     fn generate_index_expr(

@@ -128,11 +128,17 @@ impl Parser {
 
         if *self.peek_token() == Token::LBracket {
             self.consume(Token::LBracket);
-            let size = match self.next_token() {
-                Token::Integer(n) => n,
-                _ => panic!("Expected array size"),
+            let size = if *self.peek_token() == Token::RBracket {
+                self.consume(Token::RBracket);
+                0
+            } else {
+                let n = match self.next_token() {
+                    Token::Integer(n) => n,
+                    _ => panic!("Expected array size"),
+                };
+                self.consume(Token::RBracket);
+                n
             };
-            self.consume(Token::RBracket);
 
             let mut init_values = Vec::new();
             if *self.peek_token() != Token::Semicolon {
@@ -151,23 +157,41 @@ impl Parser {
             }
             self.consume(Token::Semicolon);
 
+            let actual_size = if size == 0 {
+                init_values.len() as i64
+            } else {
+                size
+            };
+
             self.global_vars.insert(name.clone(), label.clone());
             self.global_arrays.insert(
                 name,
                 GlobalArray {
                     label,
-                    size,
+                    size: actual_size,
                     init_values,
                 },
             );
         } else {
             self.global_vars.insert(name.clone(), label);
-            let expr = self.parse_expression();
-            let val = match expr {
-                Expr::Integer(n) => n,
-                _ => panic!("Expected integer constant"),
-            };
-            self.global_inits.insert(name, val);
+            if *self.peek_token() != Token::Semicolon {
+                let expr = self.parse_expression();
+                let val = match expr {
+                    Expr::Integer(n) => n,
+                    Expr::Unary {
+                        op: Token::Minus,
+                        expr,
+                    } if matches!(*expr, Expr::Integer(_)) => {
+                        if let Expr::Integer(n) = *expr {
+                            -n
+                        } else {
+                            unreachable!()
+                        }
+                    }
+                    _ => panic!("Expected integer constant"),
+                };
+                self.global_inits.insert(name, val);
+            }
             self.consume(Token::Semicolon);
         }
     }
@@ -501,12 +525,25 @@ impl Parser {
                 self.register_global();
                 vec![Stmt::Declaration]
             }
-            _ => panic!("Unsupported statement: {:?}", token),
+            _ => {
+                let expr = self.parse_expression();
+                self.consume(Token::Semicolon);
+                vec![Stmt::Expr(expr)]
+            }
         }
     }
 
     fn parse_expression(&mut self) -> Expr {
-        self.parse_conditional()
+        let mut expr = self.parse_conditional();
+        if *self.peek_token() == Token::Assign {
+            self.consume(Token::Assign);
+            let rhs = self.parse_expression();
+            expr = Expr::Assign {
+                lhs: Box::new(expr),
+                rhs: Box::new(rhs),
+            };
+        }
+        expr
     }
 
     fn parse_conditional(&mut self) -> Expr {
