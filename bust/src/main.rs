@@ -23,6 +23,52 @@ struct Args {
     output: String,
     #[arg(short = 'S', help = "Output assembly code instead of a binary")]
     assembly: bool,
+    #[arg(
+        long = "libb-path",
+        value_name = "PATH",
+        help = "Path to liblibb.a (default: LIBB_PATH env, or well-known paths)"
+    )]
+    libb_path: Option<String>,
+}
+
+fn resolve_libb(cli_path: &Option<String>) -> String {
+    if let Some(path) = cli_path {
+        if std::path::Path::new(path).exists() {
+            return path.clone();
+        }
+        eprintln!("Warning: --libb-path {} not found, falling back", path);
+    }
+
+    if let Ok(path) = std::env::var("LIBB_PATH") {
+        if std::path::Path::new(&path).exists() {
+            return path;
+        }
+    }
+
+    const CANDIDATES: &[&str] = &[
+        "/usr/local/lib64/liblibb.a",
+        "/usr/local/lib/liblibb.a",
+        "/usr/lib64/liblibb.a",
+        "/usr/lib/liblibb.a",
+        "/usr/lib/x86_64-linux-gnu/liblibb.a",
+    ];
+    for path in CANDIDATES {
+        if std::path::Path::new(path).exists() {
+            return path.to_string();
+        }
+    }
+
+    let embedded = env!("LIBB_PATH");
+    if std::path::Path::new(&embedded).exists() {
+        return embedded.to_string();
+    }
+
+    panic!(
+        "liblibb.a not found.\n\
+         Install it:  make install\n\
+         Or set:      export LIBB_PATH=/path/to/liblibb.a\n\
+         Or pass:     --libb-path /path/to/liblibb.a"
+    );
 }
 
 fn main() {
@@ -48,12 +94,15 @@ fn main() {
         if args.output == "a.out" {
             println!("{}", code);
         } else {
-            let mut file = std::fs::File::create(&args.output).expect("Failed to create output file");
+            let mut file =
+                std::fs::File::create(&args.output).expect("Failed to create output file");
             file.write_all(code.as_bytes())
                 .expect("Failed to write to output file");
         }
         return;
     }
+
+    let libb_path = resolve_libb(&args.libb_path);
 
     let mut child = std::process::Command::new("gcc")
         .arg("-x")
@@ -61,7 +110,7 @@ fn main() {
         .arg("-")
         .arg("-x")
         .arg("none")
-        .arg(env!("LIBB_PATH"))
+        .arg(&libb_path)
         .arg("-o")
         .arg(&args.output)
         .stdin(std::process::Stdio::piped())
