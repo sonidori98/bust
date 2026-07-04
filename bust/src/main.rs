@@ -1,9 +1,11 @@
-use crate::{codegen::Codegen, lexer::Lexer, parser::Parser};
+use crate::{codegen::Codegen, error::{emit_error, Diagnostic}, lexer::Lexer, parser::Parser};
 use clap::Parser as ClapParser;
 use std::io::{Read, Write};
+use std::process;
 
 mod ast;
 mod codegen;
+mod error;
 mod lexer;
 mod parser;
 mod token;
@@ -73,38 +75,73 @@ fn resolve_libb(cli_path: &Option<String>) -> String {
 
 fn main() {
     let args = Args::parse();
-    let input = if let Some(code_str) = args.string {
-        code_str
+    let (input, file_name) = if let Some(code_str) = args.string {
+        (code_str, "<string>".to_string())
     } else {
         let file_path = &args.files[0];
-        let mut file = std::fs::File::open(file_path).expect("Failed to open input file");
+        let mut file = match std::fs::File::open(file_path) {
+            Ok(f) => f,
+            Err(e) => {
+                eprintln!("error: failed to open input file `{}`: {}", file_path, e);
+                process::exit(1);
+            }
+        };
         let mut code_str = String::new();
-        file.read_to_string(&mut code_str)
-            .expect("Failed to read input file");
-        code_str
+        if let Err(e) = file.read_to_string(&mut code_str) {
+            eprintln!("error: failed to read input file `{}`: {}", file_path, e);
+            process::exit(1);
+        }
+        (code_str, file_path.clone())
     };
-    let mut lexer = Lexer::new(&input);
-    let tokens = lexer.tokenize();
+
+    let tokens = match Lexer::new(&input).tokenize() {
+        Ok(t) => t,
+        Err(diag) => {
+            emit_error(&diag, &input, &file_name);
+            process::exit(1);
+        }
+    };
+
     let mut parser = Parser::new(tokens);
+    let program = match parser.parse_program() {
+        Ok(p) => p,
+        Err(diag) => {
+            emit_error(&diag, &input, &file_name);
+            process::exit(1);
+        }
+    };
+
     let mut codegen = Codegen::new();
-    let program = parser.parse_program();
-    let code = codegen.generate(&program);
+    let code = match codegen.generate(&program) {
+        Ok(c) => c,
+        Err(msg) => {
+            eprintln!("error: {}", msg);
+            process::exit(1);
+        }
+    };
 
     if args.assembly {
         if args.output == "a.out" {
             println!("{}", code);
         } else {
-            let mut file =
-                std::fs::File::create(&args.output).expect("Failed to create output file");
-            file.write_all(code.as_bytes())
-                .expect("Failed to write to output file");
+            let mut file = match std::fs::File::create(&args.output) {
+                Ok(f) => f,
+                Err(e) => {
+                    eprintln!("error: failed to create output file `{}`: {}", args.output, e);
+                    process::exit(1);
+                }
+            };
+            if let Err(e) = file.write_all(code.as_bytes()) {
+                eprintln!("error: failed to write to output file `{}`: {}", args.output, e);
+                process::exit(1);
+            }
         }
         return;
     }
 
     let libb_path = resolve_libb(&args.libb_path);
 
-    let mut child = std::process::Command::new("gcc")
+    let mut child = match std::process::Command::new("gcc")
         .arg("-x")
         .arg("assembler")
         .arg("-")
@@ -117,18 +154,32 @@ fn main() {
         .stdout(std::process::Stdio::piped())
         .stderr(std::process::Stdio::piped())
         .spawn()
-        .expect("Failed to start gcc");
+    {
+        Ok(c) => c,
+        Err(e) => {
+            eprintln!("error: failed to start gcc: {}", e);
+            process::exit(1);
+        }
+    };
 
     if let Some(mut stdin) = child.stdin.take() {
-        stdin
-            .write_all(code.as_bytes())
-            .expect("Failed to write to stdin");
+        if let Err(e) = stdin.write_all(code.as_bytes()) {
+            eprintln!("error: failed to write to stdin: {}", e);
+            process::exit(1);
+        }
     }
 
-    let output = child.wait_with_output().expect("Failed to wait on child");
+    let output = match child.wait_with_output() {
+        Ok(o) => o,
+        Err(e) => {
+            eprintln!("error: failed to wait on child: {}", e);
+            process::exit(1);
+        }
+    };
 
     if !output.status.success() {
         let stderr = String::from_utf8_lossy(&output.stderr);
         eprintln!("{}", stderr);
+        process::exit(1);
     }
 }

@@ -1,14 +1,16 @@
 use std::collections::{HashMap, HashSet};
-use std::iter::Peekable;
-use std::vec::IntoIter;
 
 use crate::{
     ast::{Expr, Function, GlobalArray, Program, Stmt},
     token::Token,
+    Diagnostic,
 };
 
+type Spanned<T> = (T, usize, usize);
+
 pub struct Parser {
-    iter: Peekable<IntoIter<Token>>,
+    tokens: Vec<Spanned<Token>>,
+    pos: usize,
     vars: HashMap<String, i64>,
     arrays: HashSet<String>,
     global_vars: HashMap<String, String>,
@@ -16,12 +18,15 @@ pub struct Parser {
     global_arrays: HashMap<String, GlobalArray>,
     switch_count: usize,
     next_offset: i64,
+    last_start: usize,
+    last_end: usize,
 }
 
 impl Parser {
-    pub fn new(tokens: Vec<Token>) -> Self {
+    pub fn new(tokens: Vec<Spanned<Token>>) -> Self {
         Self {
-            iter: tokens.into_iter().peekable(),
+            tokens,
+            pos: 0,
             vars: HashMap::new(),
             arrays: HashSet::new(),
             global_vars: HashMap::new(),
@@ -29,22 +34,56 @@ impl Parser {
             global_arrays: HashMap::new(),
             switch_count: 0,
             next_offset: -8,
+            last_start: 0,
+            last_end: 0,
         }
     }
 
-    fn peek_token(&mut self) -> &Token {
-        self.iter.peek().unwrap_or(&Token::Eof)
+    fn peek_token(&self) -> Token {
+        self.tokens
+            .get(self.pos)
+            .map(|t| t.0.clone())
+            .unwrap_or(Token::Eof)
+    }
+
+    fn peek_span(&self) -> (usize, usize) {
+        self.tokens
+            .get(self.pos)
+            .map(|t| (t.1, t.2))
+            .unwrap_or((0, 0))
+    }
+
+    fn next_spanned(&mut self) -> Spanned<Token> {
+        let result = self
+            .tokens
+            .get(self.pos)
+            .cloned()
+            .unwrap_or((Token::Eof, 0, 0));
+        self.pos += 1;
+        self.last_start = result.1;
+        self.last_end = result.2;
+        result
     }
 
     fn next_token(&mut self) -> Token {
-        self.iter.next().unwrap_or(Token::Eof)
+        self.next_spanned().0
     }
 
-    fn consume(&mut self, expected: Token) {
-        let actual = self.next_token();
+    fn consume(&mut self, expected: Token) -> Result<(), Diagnostic> {
+        let (actual, start, end) = self.next_spanned();
         if actual != expected {
-            panic!("Expected {:?}, but got {:?}", expected, actual);
+            return Err(Diagnostic::new(
+                format!("expected `{:?}`, but found `{:?}`", expected, actual),
+                start,
+                end,
+            ));
         }
+        Ok(())
+    }
+
+    fn error(&self, msg: impl Into<String>) -> Diagnostic {
+        let (start, end) = self.peek_span();
+        Diagnostic::new(msg, start, end)
     }
 
     fn next_switch_id(&mut self) -> usize {
@@ -73,89 +112,103 @@ impl Parser {
         }
     }
 
-    fn register_global(&mut self) {
+    fn register_global(&mut self) -> Result<(), Diagnostic> {
         loop {
             if let Token::Identifier(name) = self.next_token() {
                 let label = format!(".{}", name);
                 self.global_vars.insert(name, label);
 
-                if *self.peek_token() == Token::Comma {
-                    self.consume(Token::Comma);
+                if self.peek_token() == Token::Comma {
+                    self.consume(Token::Comma)?;
                 } else {
                     break;
                 }
             }
         }
-        self.consume(Token::Semicolon);
+        self.consume(Token::Semicolon)?;
+        Ok(())
     }
 
-    pub fn parse_program(&mut self) -> Program {
+    fn check_var_defined(&self, name: &str, start: usize, end: usize) -> Result<(), Diagnostic> {
+        if !self.vars.contains_key(name) && !self.global_vars.contains_key(name) {
+            return Err(Diagnostic::new(
+                format!("undefined variable `{}`", name),
+                start,
+                end,
+            ));
+        }
+        Ok(())
+    }
+
+    pub fn parse_program(&mut self) -> Result<Program, Diagnostic> {
         let mut functions = Vec::new();
-        while *self.peek_token() != Token::Eof {
-            match self.peek_token().clone() {
+        while self.peek_token() != Token::Eof {
+            match self.peek_token() {
                 Token::Extrn => {
-                    self.consume(Token::Extrn);
-                    self.register_global();
+                    self.consume(Token::Extrn)?;
+                    self.register_global()?;
                 }
                 Token::Main => {
                     self.next_token();
-                    functions.push(self.parse_function_with_name("main".to_string()));
+                    functions.push(self.parse_function_with_name("main".to_string())?);
                 }
                 Token::Identifier(name) => {
                     self.next_token();
-                    if *self.peek_token() == Token::LParen {
-                        functions.push(self.parse_function_with_name(name));
+                    if self.peek_token() == Token::LParen {
+                        functions.push(self.parse_function_with_name(name)?);
                     } else {
-                        self.parse_global_decl_with_name(name);
+                        self.parse_global_decl_with_name(name)?;
                     }
                 }
-                _ => panic!("Unexpected token at top level: {:?}", self.peek_token()),
+                _ => {
+                    return Err(self.error("unexpected token at top level"));
+                }
             }
         }
         let globals = std::mem::take(&mut self.global_vars);
         let global_inits = std::mem::take(&mut self.global_inits);
         let global_arrays = std::mem::take(&mut self.global_arrays);
-        Program {
+        Ok(Program {
             functions,
             globals,
             global_inits,
             global_arrays,
-        }
+        })
     }
 
-    fn parse_global_decl_with_name(&mut self, name: String) {
+    fn parse_global_decl_with_name(&mut self, name: String) -> Result<(), Diagnostic> {
         let label = format!(".{}", name);
 
-        if *self.peek_token() == Token::LBracket {
-            self.consume(Token::LBracket);
-            let size = if *self.peek_token() == Token::RBracket {
-                self.consume(Token::RBracket);
+        if self.peek_token() == Token::LBracket {
+            self.consume(Token::LBracket)?;
+            let size = if self.peek_token() == Token::RBracket {
+                self.consume(Token::RBracket)?;
                 0
             } else {
                 let n = match self.next_token() {
                     Token::Integer(n) => n,
-                    _ => panic!("Expected array size"),
+                    _ => return Err(self.error("expected array size")),
                 };
-                self.consume(Token::RBracket);
+                self.consume(Token::RBracket)?;
                 n
             };
 
             let mut init_values = Vec::new();
-            if *self.peek_token() != Token::Semicolon {
+            if self.peek_token() != Token::Semicolon {
                 loop {
-                    let expr = self.parse_expression();
+                    let expr = self.parse_expression()?;
                     match expr {
                         Expr::Integer(n) => init_values.push(n),
-                        _ => panic!("Expected integer constant in array initializer"),
+                        _ => return Err(self.error("expected integer constant in array initializer")),
                     }
-                    if *self.peek_token() == Token::Comma {
-                        self.consume(Token::Comma);
+                    if self.peek_token() == Token::Comma {
+                        self.consume(Token::Comma)?;
                     } else {
                         break;
                     }
                 }
             }
-            self.consume(Token::Semicolon);
+            self.consume(Token::Semicolon)?;
 
             let actual_size = if size == 0 {
                 init_values.len() as i64
@@ -174,8 +227,8 @@ impl Parser {
             );
         } else {
             self.global_vars.insert(name.clone(), label);
-            if *self.peek_token() != Token::Semicolon {
-                let expr = self.parse_expression();
+            if self.peek_token() != Token::Semicolon {
+                let expr = self.parse_expression()?;
                 let val = match expr {
                     Expr::Integer(n) => n,
                     Expr::Unary {
@@ -188,77 +241,78 @@ impl Parser {
                             unreachable!()
                         }
                     }
-                    _ => panic!("Expected integer constant"),
+                    _ => return Err(self.error("expected integer constant")),
                 };
                 self.global_inits.insert(name, val);
             }
-            self.consume(Token::Semicolon);
+            self.consume(Token::Semicolon)?;
         }
+        Ok(())
     }
 
-    fn parse_function_with_name(&mut self, name: String) -> Function {
+    fn parse_function_with_name(&mut self, name: String) -> Result<Function, Diagnostic> {
         self.vars.clear();
         self.next_offset = -8;
 
-        self.consume(Token::LParen);
+        self.consume(Token::LParen)?;
         let mut params = Vec::new();
-        while *self.peek_token() != Token::RParen {
+        while self.peek_token() != Token::RParen {
             if let Token::Identifier(p) = self.next_token() {
                 self.vars.insert(p.clone(), self.next_offset);
                 self.next_offset -= 8;
                 params.push(p);
             }
-            if *self.peek_token() == Token::Comma {
-                self.consume(Token::Comma);
+            if self.peek_token() == Token::Comma {
+                self.consume(Token::Comma)?;
             }
         }
-        self.consume(Token::RParen);
+        self.consume(Token::RParen)?;
 
-        self.consume(Token::LBrace);
+        self.consume(Token::LBrace)?;
         let mut body = Vec::new();
-        while *self.peek_token() != Token::RBrace {
-            body.extend(self.parse_statement());
+        while self.peek_token() != Token::RBrace {
+            body.extend(self.parse_statement()?);
         }
-        self.consume(Token::RBrace);
+        self.consume(Token::RBrace)?;
 
         let locals = std::mem::take(&mut self.vars);
         let arrays = std::mem::take(&mut self.arrays);
-        Function {
+        Ok(Function {
             name,
             params,
             body,
             locals,
             arrays,
-        }
+        })
     }
 
-    fn parse_return_stmt(&mut self) -> Stmt {
-        self.consume(Token::Return);
-        let expr = if *self.peek_token() == Token::Semicolon {
+    fn parse_return_stmt(&mut self) -> Result<Stmt, Diagnostic> {
+        self.consume(Token::Return)?;
+        let expr = if self.peek_token() == Token::Semicolon {
             Expr::Integer(0)
         } else {
-            self.parse_expression()
+            self.parse_expression()?
         };
-        self.consume(Token::Semicolon);
-        Stmt::Return(expr)
+        self.consume(Token::Semicolon)?;
+        Ok(Stmt::Return(expr))
     }
 
-    fn parse_auto_stmt(&mut self) -> Vec<Stmt> {
-        self.consume(Token::Auto);
+    fn parse_auto_stmt(&mut self) -> Result<Vec<Stmt>, Diagnostic> {
+        self.consume(Token::Auto)?;
         let mut stmts = Vec::new();
         loop {
-            while *self.peek_token() == Token::Star {
+            while self.peek_token() == Token::Star {
                 self.next_token();
             }
-            if let Token::Identifier(name) = self.peek_token().clone() {
+            if let Token::Identifier(name) = self.peek_token() {
                 self.next_token();
-                if *self.peek_token() == Token::LBracket {
-                    self.consume(Token::LBracket);
+                if self.peek_token() == Token::LBracket {
+                    self.consume(Token::LBracket)?;
                     let size = match self.next_token() {
                         Token::Integer(n) => n,
-                        _ => panic!("Expected array size"),
+                        _ => return Err(self.error("expected array size")),
                     };
-                    self.consume(Token::RBracket);
+                    self.consume(Token::RBracket)?;
                     self.next_offset -= 8 * size;
                     self.vars.insert(name.clone(), self.next_offset);
                     self.arrays.insert(name);
@@ -266,453 +320,446 @@ impl Parser {
                     self.next_offset -= 8;
                     self.vars.insert(name.clone(), self.next_offset);
 
-                if *self.peek_token() != Token::Comma
-                    && *self.peek_token() != Token::Semicolon
-                {
-                    let expr = self.parse_expression();
-                    stmts.push(Stmt::Assignment(name, expr));
-                }
+                    if self.peek_token() != Token::Comma
+                        && self.peek_token() != Token::Semicolon
+                    {
+                        let expr = self.parse_expression()?;
+                        stmts.push(Stmt::Assignment(name, expr));
+                    }
                 }
 
-                if *self.peek_token() == Token::Comma {
+                if self.peek_token() == Token::Comma {
                     self.next_token();
                     continue;
                 }
             }
             break;
         }
-        self.consume(Token::Semicolon);
+        self.consume(Token::Semicolon)?;
         if stmts.is_empty() {
-            vec![Stmt::Declaration]
+            Ok(vec![Stmt::Declaration])
         } else {
-            stmts
+            Ok(stmts)
         }
     }
 
-    fn parse_goto_stmt(&mut self) -> Stmt {
-        self.consume(Token::Goto);
+    fn parse_goto_stmt(&mut self) -> Result<Stmt, Diagnostic> {
+        self.consume(Token::Goto)?;
         let label = match self.next_token() {
             Token::Identifier(n) => n,
-            _ => panic!("Expected label name"),
+            _ => return Err(self.error("expected label name")),
         };
-        self.consume(Token::Semicolon);
-        Stmt::Goto(label)
+        self.consume(Token::Semicolon)?;
+        Ok(Stmt::Goto(label))
     }
 
-    fn parse_identifier_stmt(&mut self, name: String) -> Stmt {
+    fn parse_identifier_stmt(&mut self, name: String) -> Result<Stmt, Diagnostic> {
         self.next_token();
         match self.peek_token() {
             Token::LBracket => {
-                self.consume(Token::LBracket);
-                let index = self.parse_expression();
-                self.consume(Token::RBracket);
-                if *self.peek_token() == Token::Assign {
-                    self.consume(Token::Assign);
-                    let rhs = self.parse_expression();
-                    self.consume(Token::Semicolon);
-                    Stmt::AssignIndex(name, index, rhs)
+                self.consume(Token::LBracket)?;
+                let index = self.parse_expression()?;
+                self.consume(Token::RBracket)?;
+                if self.peek_token() == Token::Assign {
+                    self.consume(Token::Assign)?;
+                    let rhs = self.parse_expression()?;
+                    self.consume(Token::Semicolon)?;
+                    Ok(Stmt::AssignIndex(name, index, rhs))
                 } else {
-                    panic!("Expected '=' after array subscript");
+                    Err(self.error("expected `=` after array subscript"))
                 }
             }
             Token::Assign => {
-                self.consume(Token::Assign);
-                let expr = self.parse_expression();
-                self.consume(Token::Semicolon);
-                Stmt::Assignment(name, expr)
+                self.consume(Token::Assign)?;
+                let expr = self.parse_expression()?;
+                self.consume(Token::Semicolon)?;
+                Ok(Stmt::Assignment(name, expr))
             }
             Token::Increment => {
-                if !self.vars.contains_key(&name) && !self.global_vars.contains_key(&name) {
-                    panic!("Undefined variable: {}", name);
-                }
+                self.check_var_defined(&name, self.last_start, self.last_end)?;
                 self.next_token();
-                self.consume(Token::Semicolon);
-                Stmt::Expr(Expr::Postfix {
+                self.consume(Token::Semicolon)?;
+                Ok(Stmt::Expr(Expr::Postfix {
                     op: Token::Increment,
                     name,
-                })
+                }))
             }
             Token::Decrement => {
-                if !self.vars.contains_key(&name) && !self.global_vars.contains_key(&name) {
-                    panic!("Undefined variable: {}", name);
-                }
+                self.check_var_defined(&name, self.last_start, self.last_end)?;
                 self.next_token();
-                self.consume(Token::Semicolon);
-                Stmt::Expr(Expr::Postfix {
+                self.consume(Token::Semicolon)?;
+                Ok(Stmt::Expr(Expr::Postfix {
                     op: Token::Decrement,
                     name,
-                })
+                }))
             }
             Token::LParen => {
-                self.consume(Token::LParen);
+                self.consume(Token::LParen)?;
                 let mut args = Vec::new();
-                if *self.peek_token() != Token::RParen {
+                if self.peek_token() != Token::RParen {
                     loop {
-                        args.push(self.parse_expression());
-                        if *self.peek_token() == Token::Comma {
-                            self.consume(Token::Comma);
+                        args.push(self.parse_expression()?);
+                        if self.peek_token() == Token::Comma {
+                            self.consume(Token::Comma)?;
                         } else {
                             break;
                         }
                     }
                 }
-                self.consume(Token::RParen);
-                self.consume(Token::Semicolon);
-                Stmt::Expr(Expr::Call { name, args })
+                self.consume(Token::RParen)?;
+                self.consume(Token::Semicolon)?;
+                Ok(Stmt::Expr(Expr::Call { name, args }))
             }
             Token::Colon => {
-                self.consume(Token::Colon);
-                Stmt::Label(name)
+                self.consume(Token::Colon)?;
+                Ok(Stmt::Label(name))
             }
             _ => {
-                let peeked = self.peek_token().clone();
+                let peeked = self.peek_token();
                 if let Some(bin_op) = self.compound_op_to_binary(peeked) {
                     self.next_token();
-                    let rhs = self.parse_expression();
-                    self.consume(Token::Semicolon);
+                    let rhs = self.parse_expression()?;
+                    self.consume(Token::Semicolon)?;
                     let desugared = Expr::Binary {
                         op: bin_op,
                         left: Box::new(Expr::Identifier(name.clone())),
                         right: Box::new(rhs),
                     };
-                    Stmt::Assignment(name, desugared)
+                    Ok(Stmt::Assignment(name, desugared))
                 } else {
-                    panic!(
-                        "Expected '=', compound assignment, '(', ':', '++', or '--' after identifier, but got {:?}",
-                        self.peek_token()
-                    );
+                    Err(self.error(
+                        "expected `=`, compound assignment, `(`, `:`, `++`, or `--` after identifier",
+                    ))
                 }
             }
         }
     }
 
-    fn parse_if_stmt(&mut self) -> Stmt {
-        self.consume(Token::If);
-        self.consume(Token::LParen);
-        let cond = self.parse_expression();
-        self.consume(Token::RParen);
+    fn parse_if_stmt(&mut self) -> Result<Stmt, Diagnostic> {
+        self.consume(Token::If)?;
+        self.consume(Token::LParen)?;
+        let cond = self.parse_expression()?;
+        self.consume(Token::RParen)?;
 
         let mut then_body = Vec::new();
-        if *self.peek_token() == Token::LBrace {
-            self.consume(Token::LBrace);
-            while *self.peek_token() != Token::RBrace {
-                then_body.extend(self.parse_statement());
+        if self.peek_token() == Token::LBrace {
+            self.consume(Token::LBrace)?;
+            while self.peek_token() != Token::RBrace {
+                then_body.extend(self.parse_statement()?);
             }
-            self.consume(Token::RBrace);
-            } else {
-                then_body.extend(self.parse_statement());
-            }
+            self.consume(Token::RBrace)?;
+        } else {
+            then_body.extend(self.parse_statement()?);
+        }
         let mut else_body = None;
-        if *self.peek_token() == Token::Else {
-            self.consume(Token::Else);
+        if self.peek_token() == Token::Else {
+            self.consume(Token::Else)?;
             let mut body = Vec::new();
-            if *self.peek_token() == Token::LBrace {
-                self.consume(Token::LBrace);
-                while *self.peek_token() != Token::RBrace {
-                    body.extend(self.parse_statement());
+            if self.peek_token() == Token::LBrace {
+                self.consume(Token::LBrace)?;
+                while self.peek_token() != Token::RBrace {
+                    body.extend(self.parse_statement()?);
                 }
-                self.consume(Token::RBrace);
+                self.consume(Token::RBrace)?;
             } else {
-                body.extend(self.parse_statement());
+                body.extend(self.parse_statement()?);
             }
             else_body = Some(body);
         }
-        Stmt::If {
+        Ok(Stmt::If {
             cond,
             then_body,
             else_body,
-        }
+        })
     }
 
-    fn parse_prefix_inc_stmt(&mut self) -> Stmt {
+    fn parse_prefix_inc_stmt(&mut self) -> Result<Stmt, Diagnostic> {
         self.next_token();
-        if let Token::Identifier(name) = self.next_token() {
-            if !self.vars.contains_key(&name) && !self.global_vars.contains_key(&name) {
-                panic!("Undefined variable: {}", name);
-            }
-            self.consume(Token::Semicolon);
-            Stmt::Expr(Expr::Prefix {
-                op: Token::Increment,
-                name,
-            })
-        } else {
-            panic!("Expected identifier after '++'");
-        }
+        let name = match self.next_token() {
+            Token::Identifier(name) => name,
+            _ => return Err(self.error("expected identifier after `++`")),
+        };
+        self.check_var_defined(&name, self.last_start, self.last_end)?;
+        self.consume(Token::Semicolon)?;
+        Ok(Stmt::Expr(Expr::Prefix {
+            op: Token::Increment,
+            name,
+        }))
     }
 
-    fn parse_prefix_dec_stmt(&mut self) -> Stmt {
+    fn parse_prefix_dec_stmt(&mut self) -> Result<Stmt, Diagnostic> {
         self.next_token();
-        if let Token::Identifier(name) = self.next_token() {
-            if !self.vars.contains_key(&name) && !self.global_vars.contains_key(&name) {
-                panic!("Undefined variable: {}", name);
-            }
-            self.consume(Token::Semicolon);
-            Stmt::Expr(Expr::Prefix {
-                op: Token::Decrement,
-                name,
-            })
-        } else {
-            panic!("Expected identifier after '--'");
-        }
+        let name = match self.next_token() {
+            Token::Identifier(name) => name,
+            _ => return Err(self.error("expected identifier after `--`")),
+        };
+        self.check_var_defined(&name, self.last_start, self.last_end)?;
+        self.consume(Token::Semicolon)?;
+        Ok(Stmt::Expr(Expr::Prefix {
+            op: Token::Decrement,
+            name,
+        }))
     }
 
-    fn parse_while_stmt(&mut self) -> Stmt {
-        self.consume(Token::While);
-        self.consume(Token::LParen);
-        let cond = self.parse_expression();
-        self.consume(Token::RParen);
+    fn parse_while_stmt(&mut self) -> Result<Stmt, Diagnostic> {
+        self.consume(Token::While)?;
+        self.consume(Token::LParen)?;
+        let cond = self.parse_expression()?;
+        self.consume(Token::RParen)?;
 
         let mut body = Vec::new();
-        if *self.peek_token() == Token::LBrace {
-            self.consume(Token::LBrace);
-            while *self.peek_token() != Token::RBrace {
-                body.extend(self.parse_statement());
+        if self.peek_token() == Token::LBrace {
+            self.consume(Token::LBrace)?;
+            while self.peek_token() != Token::RBrace {
+                body.extend(self.parse_statement()?);
             }
-            self.consume(Token::RBrace);
+            self.consume(Token::RBrace)?;
         } else {
-            body.extend(self.parse_statement());
+            body.extend(self.parse_statement()?);
         }
 
-        Stmt::While { cond, body }
+        Ok(Stmt::While { cond, body })
     }
 
-    fn parse_switch_stmt(&mut self) -> Stmt {
-        self.consume(Token::Switch);
-        self.consume(Token::LParen);
-        let cond = self.parse_expression();
-        self.consume(Token::RParen);
+    fn parse_switch_stmt(&mut self) -> Result<Stmt, Diagnostic> {
+        self.consume(Token::Switch)?;
+        self.consume(Token::LParen)?;
+        let cond = self.parse_expression()?;
+        self.consume(Token::RParen)?;
 
         let id = self.next_switch_id();
         let mut cases = Vec::new();
         let mut body = Vec::new();
 
-        self.consume(Token::LBrace);
-        while *self.peek_token() != Token::RBrace {
-            if *self.peek_token() == Token::Case {
-                self.consume(Token::Case);
+        self.consume(Token::LBrace)?;
+        while self.peek_token() != Token::RBrace {
+            if self.peek_token() == Token::Case {
+                self.consume(Token::Case)?;
                 let val = match self.next_token() {
                     Token::Integer(v) => v,
-                    _ => panic!("Expected integer value after case keyword"),
+                    _ => return Err(self.error("expected integer value after `case` keyword")),
                 };
-                self.consume(Token::Colon);
+                self.consume(Token::Colon)?;
 
                 let label_name = format!("sw_{}_case_{}", id, val);
                 cases.push((val, label_name.clone()));
                 body.push(Stmt::Label(label_name));
             } else {
-                body.extend(self.parse_statement());
+                body.extend(self.parse_statement()?);
             }
         }
-        self.consume(Token::RBrace);
+        self.consume(Token::RBrace)?;
 
-        Stmt::Switch { cond, cases, body }
+        Ok(Stmt::Switch { cond, cases, body })
     }
 
-    fn parse_statement(&mut self) -> Vec<Stmt> {
-        let token = self.peek_token().clone();
+    fn parse_statement(&mut self) -> Result<Vec<Stmt>, Diagnostic> {
+        let token = self.peek_token();
         match token {
-            Token::Return => vec![self.parse_return_stmt()],
+            Token::Return => Ok(vec![self.parse_return_stmt()?]),
             Token::Auto => self.parse_auto_stmt(),
-            Token::Goto => vec![self.parse_goto_stmt()],
-            Token::Identifier(name) => vec![self.parse_identifier_stmt(name)],
-            Token::If => vec![self.parse_if_stmt()],
-            Token::Increment => vec![self.parse_prefix_inc_stmt()],
-            Token::Decrement => vec![self.parse_prefix_dec_stmt()],
-            Token::While => vec![self.parse_while_stmt()],
-            Token::Switch => vec![self.parse_switch_stmt()],
+            Token::Goto => Ok(vec![self.parse_goto_stmt()?]),
+            Token::Identifier(name) => Ok(vec![self.parse_identifier_stmt(name)?]),
+            Token::If => Ok(vec![self.parse_if_stmt()?]),
+            Token::Increment => Ok(vec![self.parse_prefix_inc_stmt()?]),
+            Token::Decrement => Ok(vec![self.parse_prefix_dec_stmt()?]),
+            Token::While => Ok(vec![self.parse_while_stmt()?]),
+            Token::Switch => Ok(vec![self.parse_switch_stmt()?]),
             Token::Extrn => {
-                self.consume(Token::Extrn);
-                self.register_global();
-                vec![Stmt::Declaration]
+                self.consume(Token::Extrn)?;
+                self.register_global()?;
+                Ok(vec![Stmt::Declaration])
             }
             _ => {
-                let expr = self.parse_expression();
-                self.consume(Token::Semicolon);
-                vec![Stmt::Expr(expr)]
+                let expr = self.parse_expression()?;
+                self.consume(Token::Semicolon)?;
+                Ok(vec![Stmt::Expr(expr)])
             }
         }
     }
 
-    fn parse_expression(&mut self) -> Expr {
-        let mut expr = self.parse_conditional();
-        if *self.peek_token() == Token::Assign {
-            self.consume(Token::Assign);
-            let rhs = self.parse_expression();
+    fn parse_expression(&mut self) -> Result<Expr, Diagnostic> {
+        let mut expr = self.parse_conditional()?;
+        if self.peek_token() == Token::Assign {
+            self.consume(Token::Assign)?;
+            let rhs = self.parse_expression()?;
             expr = Expr::Assign {
                 lhs: Box::new(expr),
                 rhs: Box::new(rhs),
             };
         }
-        expr
+        Ok(expr)
     }
 
-    fn parse_conditional(&mut self) -> Expr {
-        let mut expr = self.parse_bit_or();
-        if *self.peek_token() == Token::Question {
-            self.consume(Token::Question);
-            let then_expr = self.parse_expression();
-            self.consume(Token::Colon);
-            let else_expr = self.parse_expression();
-            expr = Expr::Ternary {
+    fn parse_conditional(&mut self) -> Result<Expr, Diagnostic> {
+        let expr = self.parse_bit_or()?;
+        if self.peek_token() == Token::Question {
+            self.consume(Token::Question)?;
+            let then_expr = self.parse_expression()?;
+            self.consume(Token::Colon)?;
+            let else_expr = self.parse_expression()?;
+            Ok(Expr::Ternary {
                 cond: Box::new(expr),
                 then_expr: Box::new(then_expr),
                 else_expr: Box::new(else_expr),
-            }
+            })
+        } else {
+            Ok(expr)
         }
-        expr
     }
 
-    fn parse_bit_or(&mut self) -> Expr {
-        let mut left = self.parse_bit_and();
-        while *self.peek_token() == Token::BitOr {
+    fn parse_bit_or(&mut self) -> Result<Expr, Diagnostic> {
+        let mut left = self.parse_bit_and()?;
+        while self.peek_token() == Token::BitOr {
             let op = self.next_token();
-            let right = self.parse_bit_and();
+            let right = self.parse_bit_and()?;
             left = Expr::Binary {
                 op,
                 left: Box::new(left),
                 right: Box::new(right),
             }
         }
-        left
+        Ok(left)
     }
 
-    fn parse_bit_and(&mut self) -> Expr {
-        let mut left = self.parse_equality();
-        while *self.peek_token() == Token::BitAnd {
+    fn parse_bit_and(&mut self) -> Result<Expr, Diagnostic> {
+        let mut left = self.parse_equality()?;
+        while self.peek_token() == Token::BitAnd {
             let op = self.next_token();
-            let right = self.parse_equality();
+            let right = self.parse_equality()?;
             left = Expr::Binary {
                 op,
                 left: Box::new(left),
                 right: Box::new(right),
             }
         }
-        left
+        Ok(left)
     }
 
-    fn parse_equality(&mut self) -> Expr {
-        let mut left = self.parse_relational();
+    fn parse_equality(&mut self) -> Result<Expr, Diagnostic> {
+        let mut left = self.parse_relational()?;
 
-        while matches!(*self.peek_token(), Token::Equal | Token::NotEqual) {
+        while matches!(self.peek_token(), Token::Equal | Token::NotEqual) {
             let op = self.next_token();
-            let right = self.parse_relational();
+            let right = self.parse_relational()?;
             left = Expr::Binary {
                 op,
                 left: Box::new(left),
                 right: Box::new(right),
             }
         }
-        left
+        Ok(left)
     }
 
-    fn parse_relational(&mut self) -> Expr {
-        let mut left = self.parse_shift();
+    fn parse_relational(&mut self) -> Result<Expr, Diagnostic> {
+        let mut left = self.parse_shift()?;
 
         while matches!(
-            *self.peek_token(),
+            self.peek_token(),
             Token::LessThan | Token::LessEqual | Token::GreaterThan | Token::GreaterEqual
         ) {
             let op = self.next_token();
-            let right = self.parse_shift();
+            let right = self.parse_shift()?;
             left = Expr::Binary {
                 op,
                 left: Box::new(left),
                 right: Box::new(right),
             }
         }
-        left
+        Ok(left)
     }
 
-    fn parse_shift(&mut self) -> Expr {
-        let mut left = self.parse_add_sub();
-        while matches!(*self.peek_token(), Token::LShift | Token::RShift) {
+    fn parse_shift(&mut self) -> Result<Expr, Diagnostic> {
+        let mut left = self.parse_add_sub()?;
+
+        while matches!(self.peek_token(), Token::LShift | Token::RShift) {
             let op = self.next_token();
-            let right = self.parse_add_sub();
+            let right = self.parse_add_sub()?;
             left = Expr::Binary {
                 op,
                 left: Box::new(left),
                 right: Box::new(right),
             }
         }
-        left
+        Ok(left)
     }
 
-    fn parse_add_sub(&mut self) -> Expr {
-        let mut left = self.parse_mul_div();
+    fn parse_add_sub(&mut self) -> Result<Expr, Diagnostic> {
+        let mut left = self.parse_mul_div()?;
 
-        while *self.peek_token() == Token::Plus || *self.peek_token() == Token::Minus {
+        while self.peek_token() == Token::Plus || self.peek_token() == Token::Minus {
             let op = self.next_token();
-            let right = self.parse_mul_div();
+            let right = self.parse_mul_div()?;
             left = Expr::Binary {
                 op,
                 left: Box::new(left),
                 right: Box::new(right),
             }
         }
-        left
+        Ok(left)
     }
 
-    fn parse_mul_div(&mut self) -> Expr {
-        let mut left = self.parse_unary();
+    fn parse_mul_div(&mut self) -> Result<Expr, Diagnostic> {
+        let mut left = self.parse_unary()?;
 
         while matches!(
-            *self.peek_token(),
+            self.peek_token(),
             Token::Star | Token::Slash | Token::Percent
         ) {
             let op = self.next_token();
-            let right = self.parse_unary();
+            let right = self.parse_unary()?;
             left = Expr::Binary {
                 op,
                 left: Box::new(left),
                 right: Box::new(right),
             }
         }
-        left
+        Ok(left)
     }
 
-    fn parse_unary_not(&mut self) -> Expr {
+    fn parse_unary_not(&mut self) -> Result<Expr, Diagnostic> {
         self.next_token();
-        let expr = self.parse_unary();
-        Expr::Unary {
+        let expr = self.parse_unary()?;
+        Ok(Expr::Unary {
             op: Token::Not,
             expr: Box::new(expr),
-        }
+        })
     }
 
-    fn parse_unary_minus(&mut self) -> Expr {
+    fn parse_unary_minus(&mut self) -> Result<Expr, Diagnostic> {
         self.next_token();
-        let expr = self.parse_unary();
-        Expr::Unary {
+        let expr = self.parse_unary()?;
+        Ok(Expr::Unary {
             op: Token::Minus,
             expr: Box::new(expr),
-        }
+        })
     }
 
-    fn parse_unary_increment(&mut self) -> Expr {
+    fn parse_unary_increment(&mut self) -> Result<Expr, Diagnostic> {
         self.next_token();
-        let expr = self.parse_unary();
+        let expr = self.parse_unary()?;
         match expr {
-            Expr::Identifier(name) => Expr::Prefix {
+            Expr::Identifier(name) => Ok(Expr::Prefix {
                 op: Token::Increment,
                 name,
-            },
-            _ => panic!("Invalid operand for '++'"),
+            }),
+            _ => Err(self.error("invalid operand for `++`")),
         }
     }
 
-    fn parse_unary_decrement(&mut self) -> Expr {
+    fn parse_unary_decrement(&mut self) -> Result<Expr, Diagnostic> {
         self.next_token();
-        let expr = self.parse_unary();
+        let expr = self.parse_unary()?;
         match expr {
-            Expr::Identifier(name) => Expr::Prefix {
+            Expr::Identifier(name) => Ok(Expr::Prefix {
                 op: Token::Decrement,
                 name,
-            },
-            _ => panic!("Invalid operand for '--'"),
+            }),
+            _ => Err(self.error("invalid operand for `--`")),
         }
     }
 
-    fn parse_unary(&mut self) -> Expr {
+    fn parse_unary(&mut self) -> Result<Expr, Diagnostic> {
         match self.peek_token() {
             Token::Not => self.parse_unary_not(),
             Token::Minus => self.parse_unary_minus(),
@@ -724,98 +771,99 @@ impl Parser {
         }
     }
 
-    fn parse_unary_deref(&mut self) -> Expr {
+    fn parse_unary_deref(&mut self) -> Result<Expr, Diagnostic> {
         self.next_token();
-        Expr::Deref(Box::new(self.parse_unary()))
+        Ok(Expr::Deref(Box::new(self.parse_unary()?)))
     }
 
-    fn parse_unary_addr(&mut self) -> Expr {
+    fn parse_unary_addr(&mut self) -> Result<Expr, Diagnostic> {
         self.next_token();
-        Expr::Addr(Box::new(self.parse_unary()))
+        Ok(Expr::Addr(Box::new(self.parse_unary()?)))
     }
 
-    fn parse_primary_integer(&mut self) -> Expr {
+    fn parse_primary_integer(&mut self) -> Result<Expr, Diagnostic> {
         let val = match self.next_token() {
             Token::Integer(v) => v,
             _ => unreachable!(),
         };
-        Expr::Integer(val)
+        Ok(Expr::Integer(val))
     }
 
-    fn parse_primary_string_literal(&mut self) -> Expr {
+    fn parse_primary_string_literal(&mut self) -> Result<Expr, Diagnostic> {
         let data = match self.next_token() {
             Token::StringLiteral(d) => d,
             _ => unreachable!(),
         };
-        Expr::StringLiteral(data)
+        Ok(Expr::StringLiteral(data))
     }
 
-    fn parse_primary_identifier(&mut self, name: String) -> Expr {
+    fn parse_primary_identifier(&mut self, name: String) -> Result<Expr, Diagnostic> {
         self.next_token();
-        if *self.peek_token() == Token::Increment {
-            if !self.vars.contains_key(&name) && !self.global_vars.contains_key(&name) {
-                panic!("Undefined variable: {}", name);
-            }
+        if self.peek_token() == Token::Increment {
+            self.check_var_defined(&name, self.last_start, self.last_end)?;
             self.next_token();
-            Expr::Postfix {
+            Ok(Expr::Postfix {
                 op: Token::Increment,
                 name,
-            }
-        } else if *self.peek_token() == Token::Decrement {
-            if !self.vars.contains_key(&name) && !self.global_vars.contains_key(&name) {
-                panic!("Undefined variable: {}", name);
-            }
+            })
+        } else if self.peek_token() == Token::Decrement {
+            self.check_var_defined(&name, self.last_start, self.last_end)?;
             self.next_token();
-            Expr::Postfix {
+            Ok(Expr::Postfix {
                 op: Token::Decrement,
                 name,
-            }
-        } else if *self.peek_token() == Token::LParen {
-            self.consume(Token::LParen);
+            })
+        } else if self.peek_token() == Token::LParen {
+            self.consume(Token::LParen)?;
             let mut args = Vec::new();
 
-            if *self.peek_token() != Token::RParen {
+            if self.peek_token() != Token::RParen {
                 loop {
-                    args.push(self.parse_expression());
-                    if *self.peek_token() == Token::Comma {
-                        self.consume(Token::Comma);
+                    args.push(self.parse_expression()?);
+                    if self.peek_token() == Token::Comma {
+                        self.consume(Token::Comma)?;
                     } else {
                         break;
                     }
                 }
             }
-            self.consume(Token::RParen);
-            Expr::Call { name, args }
+            self.consume(Token::RParen)?;
+            Ok(Expr::Call { name, args })
         } else {
-            if !self.vars.contains_key(&name) && !self.global_vars.contains_key(&name) {
-                panic!("Undefined variable: {}", name);
-            }
-            Expr::Identifier(name)
+            self.check_var_defined(&name, self.last_start, self.last_end)?;
+            Ok(Expr::Identifier(name))
         }
     }
 
-    fn parse_primary_paren(&mut self) -> Expr {
-        self.consume(Token::LParen);
-        let expr = self.parse_expression();
-        self.consume(Token::RParen);
-        expr
+    fn parse_primary_paren(&mut self) -> Result<Expr, Diagnostic> {
+        self.consume(Token::LParen)?;
+        let expr = self.parse_expression()?;
+        self.consume(Token::RParen)?;
+        Ok(expr)
     }
 
-    fn parse_primary(&mut self) -> Expr {
-        let token = self.peek_token().clone();
+    fn parse_primary(&mut self) -> Result<Expr, Diagnostic> {
+        let token = self.peek_token();
+        let (start, end) = self.peek_span();
         let mut expr = match token {
-            Token::Integer(_) => self.parse_primary_integer(),
-            Token::StringLiteral(_) => self.parse_primary_string_literal(),
-            Token::Identifier(name) => self.parse_primary_identifier(name),
-            Token::LParen => self.parse_primary_paren(),
-            _ => panic!("Expected expression, but got {:?}", token),
+            Token::Integer(_) => self.parse_primary_integer()?,
+            Token::StringLiteral(_) => self.parse_primary_string_literal()?,
+            Token::Identifier(name) => self.parse_primary_identifier(name)?,
+            Token::LParen => self.parse_primary_paren()?,
+            _ => {
+                return Err(Diagnostic::new(
+                    format!("expected expression, but found `{:?}`", self.peek_token()),
+                    start,
+                    end,
+                ));
+            }
         };
         loop {
             match self.peek_token() {
                 Token::LBracket => {
-                    self.consume(Token::LBracket);
-                    let index = self.parse_expression();
-                    self.consume(Token::RBracket);
+                    self.consume(Token::LBracket)?;
+                    let index = self.parse_expression()?;
+                    self.consume(Token::RBracket)?;
                     expr = Expr::Index {
                         expr: Box::new(expr),
                         index: Box::new(index),
@@ -824,7 +872,7 @@ impl Parser {
                 _ => break,
             }
         }
-        expr
+        Ok(expr)
     }
 }
 
@@ -833,28 +881,25 @@ mod tests {
     use super::*;
     use crate::lexer::Lexer;
 
+    fn tokenize(input: &str) -> Vec<(Token, usize, usize)> {
+        Lexer::new(input).tokenize().unwrap()
+    }
+
     #[test]
-    #[should_panic(expected = "Undefined variable: y")]
     fn test_parser_undefined_variable() {
         let input = "main() { auto x; return x + y; }";
-        let mut lexer = Lexer::new(input);
-        let tokens = lexer.tokenize();
-
-        let mut parser = Parser::new(tokens);
-        parser.parse_program();
+        let mut parser = Parser::new(tokenize(input));
+        let err = parser.parse_program().unwrap_err();
+        assert!(err.message.contains("undefined variable"));
     }
 
     #[test]
     fn test_parser_variables() {
         let input = "main() { auto x, y; x = 1; y = 2; return x + y; }";
+        let mut parser = Parser::new(tokenize(input));
+        let program = parser.parse_program().unwrap();
 
-        let mut lexer = Lexer::new(input);
-        let tokens = lexer.tokenize();
-
-        let mut parser = Parser::new(tokens);
-        let cr = parser.parse_program();
-
-        let func = &cr.functions[0];
+        let func = &program.functions[0];
         assert_eq!(func.body.len(), 4);
 
         assert!(matches!(&func.body[0], Stmt::Declaration));
@@ -905,11 +950,9 @@ mod tests {
     #[test]
     fn test_parser_bare_return() {
         let input = "main() { return; }";
-        let mut lexer = Lexer::new(input);
-        let tokens = lexer.tokenize();
-        let mut parser = Parser::new(tokens);
-        let cr = parser.parse_program();
-        let func = &cr.functions[0];
+        let mut parser = Parser::new(tokenize(input));
+        let program = parser.parse_program().unwrap();
+        let func = &program.functions[0];
         assert_eq!(func.body.len(), 1);
         if let Stmt::Return(expr) = &func.body[0] {
             if let Expr::Integer(val) = expr {
@@ -925,16 +968,12 @@ mod tests {
     #[test]
     fn test_parser() {
         let input = "main() { return 42; }";
+        let mut parser = Parser::new(tokenize(input));
+        let program = parser.parse_program().unwrap();
 
-        let mut lexer = Lexer::new(input);
-        let tokens = lexer.tokenize();
+        assert_eq!(program.functions.len(), 1);
 
-        let mut parser = Parser::new(tokens);
-        let cr = parser.parse_program();
-
-        assert_eq!(cr.functions.len(), 1);
-
-        let func = &cr.functions[0];
+        let func = &program.functions[0];
         assert_eq!(func.name, "main");
         assert_eq!(func.body.len(), 1);
 
@@ -953,14 +992,10 @@ mod tests {
     #[test]
     fn test_parser_arithmetic() {
         let input = "main() { return 1 + 2 * 3; }";
+        let mut parser = Parser::new(tokenize(input));
+        let program = parser.parse_program().unwrap();
 
-        let mut lexer = Lexer::new(input);
-        let tokens = lexer.tokenize();
-
-        let mut parser = Parser::new(tokens);
-        let cr = parser.parse_program();
-
-        let func = &cr.functions[0];
+        let func = &program.functions[0];
         if let Stmt::Return(expr) = &func.body[0] {
             match expr {
                 Expr::Binary { op, left, right } => {
@@ -994,14 +1029,10 @@ mod tests {
     #[test]
     fn test_parser_if() {
         let input = "main() { if (1 == 1) { return 42; } return 0; }";
+        let mut parser = Parser::new(tokenize(input));
+        let program = parser.parse_program().unwrap();
 
-        let mut lexer = Lexer::new(input);
-        let tokens = lexer.tokenize();
-
-        let mut parser = Parser::new(tokens);
-        let cr = parser.parse_program();
-
-        let func = &cr.functions[0];
+        let func = &program.functions[0];
         assert_eq!(func.body.len(), 2);
 
         if let Stmt::If {
@@ -1025,14 +1056,10 @@ mod tests {
     #[test]
     fn test_parser_comparison() {
         let input = "main() { return 1 == 2 != 3 < 4 <= 5 > 6 >= 7; }";
+        let mut parser = Parser::new(tokenize(input));
+        let program = parser.parse_program().unwrap();
 
-        let mut lexer = Lexer::new(input);
-        let tokens = lexer.tokenize();
-
-        let mut parser = Parser::new(tokens);
-        let cr = parser.parse_program();
-
-        let func = &cr.functions[0];
+        let func = &program.functions[0];
         if let Stmt::Return(expr) = &func.body[0] {
             if let Expr::Binary { op, .. } = expr {
                 assert!(matches!(op, Token::Equal | Token::NotEqual));
@@ -1047,14 +1074,10 @@ mod tests {
     #[test]
     fn test_parser_parentheses() {
         let input = "main() { return (1 + 2) * 3; }";
+        let mut parser = Parser::new(tokenize(input));
+        let program = parser.parse_program().unwrap();
 
-        let mut lexer = Lexer::new(input);
-        let tokens = lexer.tokenize();
-
-        let mut parser = Parser::new(tokens);
-        let cr = parser.parse_program();
-
-        let func = &cr.functions[0];
+        let func = &program.functions[0];
         if let Stmt::Return(expr) = &func.body[0] {
             match expr {
                 Expr::Binary { op, left, right } => {
@@ -1088,14 +1111,10 @@ mod tests {
     #[test]
     fn test_parser_if_no_brace() {
         let input = "main() { if (1 == 1) return 42; return 0; }";
+        let mut parser = Parser::new(tokenize(input));
+        let program = parser.parse_program().unwrap();
 
-        let mut lexer = Lexer::new(input);
-        let tokens = lexer.tokenize();
-
-        let mut parser = Parser::new(tokens);
-        let cr = parser.parse_program();
-
-        let func = &cr.functions[0];
+        let func = &program.functions[0];
         assert_eq!(func.body.len(), 2);
 
         if let Stmt::If {
@@ -1119,14 +1138,10 @@ mod tests {
     #[test]
     fn test_parser_if_else_no_brace() {
         let input = "main() { if (1 == 1) return 42; else return 0; }";
+        let mut parser = Parser::new(tokenize(input));
+        let program = parser.parse_program().unwrap();
 
-        let mut lexer = Lexer::new(input);
-        let tokens = lexer.tokenize();
-
-        let mut parser = Parser::new(tokens);
-        let cr = parser.parse_program();
-
-        let func = &cr.functions[0];
+        let func = &program.functions[0];
         assert_eq!(func.body.len(), 1);
 
         if let Stmt::If {
@@ -1146,14 +1161,10 @@ mod tests {
     #[test]
     fn test_parser_while() {
         let input = "main() { while (1) { return 42; } }";
+        let mut parser = Parser::new(tokenize(input));
+        let program = parser.parse_program().unwrap();
 
-        let mut lexer = Lexer::new(input);
-        let tokens = lexer.tokenize();
-
-        let mut parser = Parser::new(tokens);
-        let cr = parser.parse_program();
-
-        let func = &cr.functions[0];
+        let func = &program.functions[0];
         if let Stmt::While { cond: _, body } = &func.body[0] {
             assert_eq!(body.len(), 1);
         } else {
@@ -1164,14 +1175,10 @@ mod tests {
     #[test]
     fn test_parser_while_no_brace() {
         let input = "main() { while (1) return 42; }";
+        let mut parser = Parser::new(tokenize(input));
+        let program = parser.parse_program().unwrap();
 
-        let mut lexer = Lexer::new(input);
-        let tokens = lexer.tokenize();
-
-        let mut parser = Parser::new(tokens);
-        let cr = parser.parse_program();
-
-        let func = &cr.functions[0];
+        let func = &program.functions[0];
         if let Stmt::While { cond: _, body } = &func.body[0] {
             assert_eq!(body.len(), 1);
         } else {
@@ -1182,11 +1189,8 @@ mod tests {
     #[test]
     fn test_parser_global_variables() {
         let input = "extrn a, b; extrn c; main() { return a + b + c; }";
-        let mut lexer = Lexer::new(input);
-        let tokens = lexer.tokenize();
-
-        let mut parser = Parser::new(tokens);
-        let program = parser.parse_program();
+        let mut parser = Parser::new(tokenize(input));
+        let program = parser.parse_program().unwrap();
 
         assert_eq!(program.globals.len(), 3);
         assert!(program.globals.contains_key("a"));
@@ -1204,9 +1208,8 @@ mod tests {
     #[test]
     fn test_parser_global_local_mix() {
         let input = "extrn x; main() { auto x; x = 1; return x; }";
-        let mut lexer = Lexer::new(input);
-        let mut parser = Parser::new(lexer.tokenize());
-        let program = parser.parse_program();
+        let mut parser = Parser::new(tokenize(input));
+        let program = parser.parse_program().unwrap();
 
         let func = &program.functions[0];
         assert!(func.locals.contains_key("x"));
@@ -1214,15 +1217,13 @@ mod tests {
     }
 
     fn parse_one(input: &str) -> Stmt {
-        let mut lexer = Lexer::new(input);
-        let mut parser = Parser::new(lexer.tokenize());
-        let program = parser.parse_program();
-        program.functions[0].body[1].clone() // body[0] = auto x; body[1] = 複合代入
+        let mut parser = Parser::new(tokenize(input));
+        let program = parser.parse_program().unwrap();
+        program.functions[0].body[1].clone()
     }
 
     #[test]
     fn test_parser_plus_assign() {
-        // x =+ 5  →  x = x + 5
         let stmt = parse_one("main() { auto x; x =+ 5; }");
         if let Stmt::Assignment(name, Expr::Binary { op, left, right }) = stmt {
             assert_eq!(name, "x");
@@ -1236,7 +1237,6 @@ mod tests {
 
     #[test]
     fn test_parser_minus_assign() {
-        // x =- 3  →  x = x - 3
         let stmt = parse_one("main() { auto x; x =- 3; }");
         if let Stmt::Assignment(name, Expr::Binary { op, left, right }) = stmt {
             assert_eq!(name, "x");
@@ -1250,7 +1250,6 @@ mod tests {
 
     #[test]
     fn test_parser_mul_assign() {
-        // x =* 2  →  x = x * 2
         let stmt = parse_one("main() { auto x; x =* 2; }");
         if let Stmt::Assignment(name, Expr::Binary { op, left, right }) = stmt {
             assert_eq!(name, "x");
@@ -1264,7 +1263,6 @@ mod tests {
 
     #[test]
     fn test_parser_div_assign() {
-        // x =/ 4  →  x = x / 4
         let stmt = parse_one("main() { auto x; x =/ 4; }");
         if let Stmt::Assignment(name, Expr::Binary { op, left, right }) = stmt {
             assert_eq!(name, "x");
@@ -1278,7 +1276,6 @@ mod tests {
 
     #[test]
     fn test_parser_mod_assign() {
-        // x =% 3  →  x = x % 3
         let stmt = parse_one("main() { auto x; x =% 3; }");
         if let Stmt::Assignment(name, Expr::Binary { op, left, right }) = stmt {
             assert_eq!(name, "x");
@@ -1292,7 +1289,6 @@ mod tests {
 
     #[test]
     fn test_parser_bitand_assign() {
-        // x =& 7  →  x = x & 7
         let stmt = parse_one("main() { auto x; x =& 7; }");
         if let Stmt::Assignment(name, Expr::Binary { op, left, right }) = stmt {
             assert_eq!(name, "x");
@@ -1306,7 +1302,6 @@ mod tests {
 
     #[test]
     fn test_parser_bitor_assign() {
-        // x =| 3  →  x = x | 3
         let stmt = parse_one("main() { auto x; x =| 3; }");
         if let Stmt::Assignment(name, Expr::Binary { op, left, right }) = stmt {
             assert_eq!(name, "x");
@@ -1320,7 +1315,6 @@ mod tests {
 
     #[test]
     fn test_parser_lshift_assign() {
-        // x =<< 2  →  x = x << 2
         let stmt = parse_one("main() { auto x; x =<< 2; }");
         if let Stmt::Assignment(name, Expr::Binary { op, left, right }) = stmt {
             assert_eq!(name, "x");
@@ -1334,7 +1328,6 @@ mod tests {
 
     #[test]
     fn test_parser_rshift_assign() {
-        // x =>> 1  →  x = x >> 1
         let stmt = parse_one("main() { auto x; x =>> 1; }");
         if let Stmt::Assignment(name, Expr::Binary { op, left, right }) = stmt {
             assert_eq!(name, "x");
@@ -1425,9 +1418,8 @@ mod tests {
     }
 
     fn body(index: usize, input: &str) -> Stmt {
-        let mut lexer = Lexer::new(input);
-        let mut parser = Parser::new(lexer.tokenize());
-        let program = parser.parse_program();
+        let mut parser = Parser::new(tokenize(input));
+        let program = parser.parse_program().unwrap();
         program.functions[0].body[index].clone()
     }
 
@@ -1500,9 +1492,8 @@ mod tests {
     #[test]
     fn test_parser_incdec_global() {
         let input = "extrn x; main() { ++x; x--; return x; }";
-        let mut lexer = Lexer::new(input);
-        let mut parser = Parser::new(lexer.tokenize());
-        let program = parser.parse_program();
+        let mut parser = Parser::new(tokenize(input));
+        let program = parser.parse_program().unwrap();
         assert!(program.globals.contains_key("x"));
         let body = &program.functions[0].body;
         assert_eq!(body.len(), 3);
@@ -1521,238 +1512,11 @@ mod tests {
     #[test]
     fn test_parser_switch() {
         let input = "main() { auto x; switch(x) { case 1: return 1; case 2: return 2; } }";
-        let mut lexer = Lexer::new(input);
-        let mut parser = Parser::new(lexer.tokenize());
-        let program = parser.parse_program();
+        let mut parser = Parser::new(tokenize(input));
+        let program = parser.parse_program().unwrap();
         let body = &program.functions[0].body;
 
         assert_eq!(body.len(), 2);
         assert!(matches!(&body[1], Stmt::Switch { .. }));
-        if let Stmt::Switch {
-            cond: _,
-            cases,
-            body: switch_body,
-        } = &body[1]
-        {
-            assert_eq!(cases.len(), 2);
-            assert_eq!(cases[0], (1, format!("sw_1_case_1")));
-            assert_eq!(cases[1], (2, format!("sw_1_case_2")));
-            assert_eq!(switch_body.len(), 4);
-            assert!(matches!(&switch_body[0], Stmt::Label(n) if n == "sw_1_case_1"));
-            assert!(matches!(&switch_body[2], Stmt::Label(n) if n == "sw_1_case_2"));
-        }
-    }
-
-    #[test]
-    fn test_parser_switch_second_id() {
-        let input = "main() { switch(0) { case 0: } switch(1) { case 1: } }";
-        let mut lexer = Lexer::new(input);
-        let mut parser = Parser::new(lexer.tokenize());
-        let program = parser.parse_program();
-        let body = &program.functions[0].body;
-
-        assert_eq!(body.len(), 2);
-        if let Stmt::Switch { cases, .. } = &body[0] {
-            assert_eq!(cases[0].1, "sw_1_case_0");
-        }
-        if let Stmt::Switch { cases, .. } = &body[1] {
-            assert_eq!(cases[0].1, "sw_2_case_1");
-        }
-    }
-
-    #[test]
-    fn test_parser_goto() {
-        let stmt = body(1, "main() { auto x; goto end; }");
-        if let Stmt::Goto(label) = stmt {
-            assert_eq!(label, "end");
-        } else {
-            panic!("Expected Stmt::Goto");
-        }
-    }
-
-    #[test]
-    fn test_parser_label() {
-        let stmt = body(1, "main() { auto x; loop: return x; }");
-        if let Stmt::Label(label) = stmt {
-            assert_eq!(label, "loop");
-        } else {
-            panic!("Expected Stmt::Label");
-        }
-    }
-
-    #[test]
-    fn test_parser_goto_label_roundtrip() {
-        let input = "main() { auto x; x = 0; loop: x = x + 1; if (x < 5) goto loop; return x; }";
-        let mut lexer = Lexer::new(input);
-        let mut parser = Parser::new(lexer.tokenize());
-        let program = parser.parse_program();
-        let body = &program.functions[0].body;
-
-        assert_eq!(body.len(), 6);
-        assert!(matches!(&body[2], Stmt::Label(n) if n == "loop"));
-        assert!(matches!(&body[3], Stmt::Assignment(..)));
-        if let Stmt::If {
-            cond: _,
-            then_body,
-            else_body: _,
-        } = &body[4]
-        {
-            assert_eq!(then_body.len(), 1);
-            assert!(matches!(&then_body[0], Stmt::Goto(n) if n == "loop"));
-        } else {
-            panic!("Expected Stmt::If at body[4]");
-        }
-    }
-
-    #[test]
-    fn test_parser_unary_minus() {
-        let stmt = body(1, "main() { auto x; x = -1; }");
-        if let Stmt::Assignment(name, Expr::Unary { op, expr }) = stmt {
-            assert_eq!(name, "x");
-            assert_eq!(op, Token::Minus);
-            assert!(matches!(*expr, Expr::Integer(1)));
-        } else {
-            panic!("Expected Stmt::Assignment with Unary(Minus)");
-        }
-    }
-
-    #[test]
-    fn test_parser_unary_minus_chain() {
-        let stmt = body(1, "main() { auto x; x = - -1; }");
-        if let Stmt::Assignment(name, Expr::Unary { op, expr }) = stmt {
-            assert_eq!(name, "x");
-            assert_eq!(op, Token::Minus);
-            assert!(matches!(
-                *expr,
-                Expr::Unary {
-                    op: Token::Minus,
-                    ..
-                }
-            ));
-        } else {
-            panic!("Expected double unary minus");
-        }
-    }
-
-    #[test]
-    fn test_parser_unary_minus_expr() {
-        let stmt = body(1, "main() { auto x, y; x = -(y + 1); }");
-        if let Stmt::Assignment(name, Expr::Unary { op, expr }) = stmt {
-            assert_eq!(name, "x");
-            assert_eq!(op, Token::Minus);
-            assert!(matches!(*expr, Expr::Binary { .. }));
-        } else {
-            panic!("Expected unary minus of parenthesized expr");
-        }
-    }
-
-    #[test]
-    fn test_parser_ternary() {
-        let stmt = body(0, "main() { return 1 ? 10 : 20; }");
-        if let Stmt::Return(Expr::Ternary {
-            cond,
-            then_expr,
-            else_expr,
-        }) = stmt
-        {
-            assert!(matches!(*cond, Expr::Integer(1)));
-            assert!(matches!(*then_expr, Expr::Integer(10)));
-            assert!(matches!(*else_expr, Expr::Integer(20)));
-        } else {
-            panic!("Expected Stmt::Return(Expr::Ternary)");
-        }
-    }
-
-    #[test]
-    fn test_parser_unary_not() {
-        let stmt = body(1, "main() { auto x; return !x; }");
-        if let Stmt::Return(Expr::Unary { op, expr }) = stmt {
-            assert_eq!(op, Token::Not);
-            assert!(matches!(*expr, Expr::Identifier(ref n) if n == "x"));
-        } else {
-            panic!("Expected Stmt::Return(Expr::Unary(Not))");
-        }
-    }
-
-    #[test]
-    #[should_panic(expected = "Undefined variable")]
-    fn test_parser_incdec_undefined_var_postfix() {
-        let input = "main() { y++; }";
-        let mut lexer = Lexer::new(input);
-        let mut parser = Parser::new(lexer.tokenize());
-        parser.parse_program();
-    }
-
-    #[test]
-    #[should_panic(expected = "Undefined variable")]
-    fn test_parser_incdec_undefined_var_prefix() {
-        let input = "main() { ++y; }";
-        let mut lexer = Lexer::new(input);
-        let mut parser = Parser::new(lexer.tokenize());
-        parser.parse_program();
-    }
-
-    fn parse_program(input: &str) -> crate::ast::Program {
-        let mut lexer = Lexer::new(input);
-        let mut parser = Parser::new(lexer.tokenize());
-        parser.parse_program()
-    }
-
-    #[test]
-    fn test_parser_array_declaration() {
-        let program = parse_program("main() { auto a[5]; }");
-        assert!(program.functions[0].arrays.contains("a"));
-        assert!(program.functions[0].locals.contains_key("a"));
-    }
-
-    #[test]
-    fn test_parser_array_index() {
-        let stmt = body(1, "main() { auto a[5]; return a[0]; }");
-        if let Stmt::Return(Expr::Index { expr, index }) = stmt {
-            assert!(matches!(*expr, Expr::Identifier(ref n) if n == "a"));
-            assert!(matches!(*index, Expr::Integer(0)));
-        } else {
-            panic!("Expected Stmt::Return(Expr::Index)");
-        }
-    }
-
-    #[test]
-    fn test_parser_array_assign() {
-        let stmt = body(1, "main() { auto a[5]; a[0] = 42; }");
-        if let Stmt::AssignIndex(name, index, rhs) = stmt {
-            assert_eq!(name, "a");
-            assert!(matches!(index, Expr::Integer(0)));
-            assert!(matches!(rhs, Expr::Integer(42)));
-        } else {
-            panic!("Expected Stmt::AssignIndex");
-        }
-    }
-
-    #[test]
-    fn test_parser_pointer_deref() {
-        let stmt = body(2, "main() { auto x; auto *p; return *p; }");
-        if let Stmt::Return(Expr::Deref(expr)) = stmt {
-            assert!(matches!(*expr, Expr::Identifier(ref n) if n == "p"));
-        } else {
-            panic!("Expected Stmt::Return(Expr::Deref)");
-        }
-    }
-
-    #[test]
-    fn test_parser_addr_of() {
-        let stmt = body(2, "main() { auto x; auto *p; p = &x; }");
-        if let Stmt::Assignment(name, Expr::Addr(expr)) = stmt {
-            assert_eq!(name, "p");
-            assert!(matches!(*expr, Expr::Identifier(ref n) if n == "x"));
-        } else {
-            panic!("Expected Stmt::Assignment(Addr)");
-        }
-    }
-
-    #[test]
-    fn test_parser_pointer_decl() {
-        let program = parse_program("main() { auto *p; auto **q; }");
-        assert!(program.functions[0].locals.contains_key("p"));
-        assert!(program.functions[0].locals.contains_key("q"));
     }
 }
