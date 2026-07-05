@@ -56,8 +56,8 @@ cargo xtask test
 
 ## References
 
-- [BCause](https://github.com/Spydr06/BCause) — C implementation that inspired this project (inspiration)
-- [blang](https://github.com/sergev/blang) — Go/LLVM implementation (inspiration)
+- [BCause](https://github.com/Spydr06/BCause) — C implementation of the B language that inspired this project.
+- [blang](https://github.com/sergev/blang) — Go/LLVM implementation of the B language that inspired this project.
 - [Users' Reference to B](https://raw.githubusercontent.com/sergev/blang/refs/heads/main/doc/kbman.pdf) by Ken Thompson (1972)
 
 ## License
