@@ -46,6 +46,7 @@ cargo xtask uninstall --prefix ~/.local  # remove from ~/.local
 Larger programs written in B using `bust` can be found here:
 
 - [Bad Bapple](https://github.com/sonidori98/Bad-Bapple/tree/main) — Bad Apple!! rendered as ASCII art in B.
+- [bcube](https://github.com/sonidori98/bcube/tree/main) — Rotating ASCII cube in B.
 
 ## Test
 
