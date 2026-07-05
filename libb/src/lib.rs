@@ -392,8 +392,7 @@ pub extern "sysv64" fn execl() {
         // argv[4]
         // スタック引数
 
-        // sys_execve
-        "mov rdx, 0",
+        "mov rdx, [rip + environ]",
         "mov rax, 59",
         "syscall",
 
@@ -420,14 +419,11 @@ pub extern "sysv64" fn execv(string: i64, argv: i64, count: i64) {
         args.push(unsafe { *(argv as *const i64).offset(i as isize) });
     }
     args.push(0);
-    let envp: i64 = 0;
+    unsafe extern "C" {
+        static environ: *const *const i8;
+    }
     unsafe {
-        syscall3(
-            SYS_EXECVE,
-            string,
-            args.as_ptr() as i64,
-            &envp as *const i64 as i64,
-        );
+        syscall3(SYS_EXECVE, string, args.as_ptr() as i64, environ as i64);
     }
 }
 
