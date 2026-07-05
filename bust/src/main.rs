@@ -12,7 +12,7 @@ mod token;
 
 #[derive(ClapParser)]
 struct Args {
-    #[arg(value_name = "FILES", required_unless_present = "string")]
+    #[arg(value_name = "FILES...", required_unless_present = "string", help = "Source file (.b) followed by optional object files (.o) to link")]
     files: Vec<String>,
     #[arg(
         short = 's',
@@ -141,19 +141,21 @@ fn main() {
 
     let libb_path = resolve_libb(&args.libb_path);
 
-    let mut child = match std::process::Command::new("gcc")
-        .arg("-x")
-        .arg("assembler")
-        .arg("-")
-        .arg("-x")
-        .arg("none")
-        .arg(&libb_path)
-        .arg("-o")
-        .arg(&args.output)
+    let mut cmd = std::process::Command::new("gcc");
+    cmd.arg("-x").arg("assembler").arg("-")
+        .arg("-x").arg("none");
+
+    for obj in &args.files[1..] {
+        cmd.arg(obj);
+    }
+
+    cmd.arg(&libb_path)
+        .arg("-o").arg(&args.output)
         .stdin(std::process::Stdio::piped())
         .stdout(std::process::Stdio::piped())
-        .stderr(std::process::Stdio::piped())
-        .spawn()
+        .stderr(std::process::Stdio::piped());
+
+    let mut child = match cmd.spawn()
     {
         Ok(c) => c,
         Err(e) => {
